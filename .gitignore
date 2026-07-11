@@ -1,0 +1,34 @@
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Xcode
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Build artifacts
+DeskPet.app/
+DeskPet.dmg
+
+# Tauri
+deskpet-tauri/node_modules/
+deskpet-tauri/src-tauri/target/
+deskpet-tauri/src-tauri/gen/
+
+# Claude Code
+.claude/
+
+# Reference images (not part of app)
+cat_image/
