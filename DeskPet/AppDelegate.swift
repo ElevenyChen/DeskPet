@@ -653,6 +653,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Soft Reminder
 
     private func showSoftReminder(_ item: ReminderItem) {
+        guard !isReminding else { return }
         isReminding = true
         dismissBubble()
 
@@ -715,6 +716,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Hard Reminder
 
     private func showHardReminder(_ item: ReminderItem) {
+        guard !isReminding else { return }
         dismissBubble()
         isReminding = true
 
@@ -917,6 +919,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Reminder Entry
 
     func showReminder(_ item: ReminderItem, strength: ReminderStrength) {
+        guard !isReminding else { return }
         if strength == .soft {
             showSoftReminder(item)
         } else {
