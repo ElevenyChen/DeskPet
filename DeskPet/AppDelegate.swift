@@ -553,20 +553,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
 
-            // After ~25s idle → lie down
-            if self.catState == .idle && self.idleCounter >= 5 {
+            // After ~30-50s idle → lie down
+            if self.catState == .idle && self.idleCounter >= Int.random(in: 6...10) {
                 self.setCatState(.lyingDown)
                 return
             }
 
-            // After ~25s lying → fall asleep
-            if self.catState == .lyingDown && self.idleCounter >= 10 {
+            // After ~40-80s lying → fall asleep
+            if self.catState == .lyingDown && self.idleCounter >= Int.random(in: 14...26) {
                 self.setCatState(.sleeping)
                 return
             }
 
-            // After ~60s sleeping → wake up
-            if self.catState == .sleeping && self.idleCounter >= 22 {
+            // After ~3-8 min sleeping → wake up
+            if self.catState == .sleeping && self.idleCounter >= Int.random(in: 36...96) {
                 self.idleCounter = 0
                 self.setCatState(.idle)
                 return
