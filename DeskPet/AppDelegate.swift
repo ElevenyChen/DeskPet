@@ -498,23 +498,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             self.idleCounter += 1
 
-            // Playing/chasingTail auto-end after ~10-15s
-            if self.catState == .playing && self.idleCounter >= 3 {
+            // Auto-end random activities
+            if self.catState == .playing && self.idleCounter >= Int.random(in: 4...6) {
                 self.idleCounter = 0
                 self.setCatState(.idle)
                 return
             }
-            if self.catState == .chasingTail && self.idleCounter >= 2 {
+            if self.catState == .chasingTail && self.idleCounter >= Int.random(in: 3...5) {
                 self.idleCounter = 0
                 self.setCatState(.idle)
                 return
             }
-            if self.catState == .bellyUp && self.idleCounter >= 3 {
+            if self.catState == .bellyUp && self.idleCounter >= Int.random(in: 4...7) {
                 self.idleCounter = 0
                 self.setCatState(.idle)
                 return
             }
-            if self.catState == .grooming && self.idleCounter >= 4 {
+            if self.catState == .grooming && self.idleCounter >= Int.random(in: 5...8) {
                 self.idleCounter = 0
                 self.setCatState(.idle)
                 return
@@ -565,8 +565,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
-            // After ~3-8 min sleeping → wake up
-            if self.catState == .sleeping && self.idleCounter >= Int.random(in: 36...96) {
+            // After ~3-5 min sleeping → wake up
+            if self.catState == .sleeping && self.idleCounter >= Int.random(in: 36...60) {
                 self.idleCounter = 0
                 self.setCatState(.idle)
                 return
