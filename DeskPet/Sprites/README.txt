@@ -138,6 +138,21 @@ dragged/        Being picked up / dragged by mouse.
                 Note: the cat window stretches taller (160x200) during drag
                 Frame rate: 0.3s per frame
 
+attacking/      Cat attacking / swiping claws (triggered by clicking 5-15 times).
+                Suggested: 2-4 frames (paw swipe, claws out)
+                Frame rate: 0.2s per frame
+                If this folder is empty, the cat shows a "!" instead.
+
+playing/        Playful behavior (randomly triggered from idle).
+                Suggested: 2-4 frames (batting at a toy, pouncing)
+                Frame rate: 0.5s per frame
+                This state only triggers if sprites exist in this folder.
+
+chasing_tail/   Cat spinning to chase its own tail (randomly triggered from idle).
+                Suggested: 2-4 frames (turning in circles)
+                Frame rate: 0.25s per frame
+                This state only triggers if sprites exist in this folder.
+
 paw_print/      Footprint left behind while walking.
                 Only uses 0.png (single image, not animated).
                 Suggested: 20x16 px, very small

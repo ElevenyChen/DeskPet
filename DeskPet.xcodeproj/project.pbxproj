@@ -19,6 +19,7 @@
 		AA00000A /* CatFrames.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00000D; };
 		AA00000B /* Sprites in Resources */ = {isa = PBXBuildFile; fileRef = AB00000E; };
 		AA00000C /* Sounds in Resources */ = {isa = PBXBuildFile; fileRef = AB00000F; };
+		AA00000D /* AlarmManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000010; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -37,6 +38,7 @@
 		AB00000D /* CatFrames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatFrames.swift; sourceTree = "<group>"; };
 		AB00000E /* Sprites */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sprites; sourceTree = "<group>"; };
 		AB00000F /* Sounds */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sounds; sourceTree = "<group>"; };
+		AB000010 /* AlarmManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,6 +77,7 @@
 				AB00000D /* CatFrames.swift */,
 				AB00000E /* Sprites */,
 				AB00000F /* Sounds */,
+				AB000010 /* AlarmManager.swift */,
 			);
 			path = DeskPet;
 			sourceTree = "<group>";
@@ -163,6 +166,7 @@
 				AA000007 /* ReminderManager.swift in Sources */,
 				AA000009 /* main.swift in Sources */,
 				AA00000A /* CatFrames.swift in Sources */,
+				AA00000D /* AlarmManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -8,6 +8,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var usingPNG = false
     private var bubbleWindow: NSWindow?
     private let reminderManager = ReminderManager.shared
+    private let alarmManager = AlarmManager.shared
     private let settings = SettingsManager.shared
 
     private var catState: CatState = .idle
@@ -25,17 +26,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayWindow: NSWindow?
     private var originalCatWindowFrame: NSRect?
     private var activeHardReminderItem: ReminderItem?
+    private var activeHardAlarmItem: AlarmItem?
     private var scaleTimer: Timer?
     private var walkAnimTimer: Timer?
     private var stateBeforeDrag: CatState?
     private var customSounds: [NSSound] = []
     private var clickedRestoreTimer: Timer?
+    private var clickCount = 0
+    private var attackThreshold = Int.random(in: 5...15)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
         setupCatWindow()
         reminderManager.delegate = self
         reminderManager.start()
+        alarmManager.delegate = self
+        alarmManager.start()
         startBehaviorLoop()
         customSounds = CatFrames.loadCustomSounds()
         if let customIcon = CatFrames.customIcon() {
@@ -100,6 +106,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         addItem.target = self
         reminderMenu.addItem(addItem)
         menu.addItem(reminderItem)
+        menu.addItem(.separator())
+
+        let alarmItem = NSMenuItem(title: en ? "Alarms" : "闹钟", action: nil, keyEquivalent: "")
+        let alarmMenu = NSMenu()
+        alarmItem.submenu = alarmMenu
+        for (index, alarm) in settings.alarms.enumerated() {
+            let strengthLabel: String
+            if let s = alarm.strengthOverride {
+                strengthLabel = s == .hard ? (en ? "strong" : "强") : (en ? "soft" : "软")
+            } else {
+                strengthLabel = en ? "system" : "跟随系统"
+            }
+            let repeatLabel = alarm.repeatDaily ? (en ? ", daily" : ", 每天") : ""
+            let label = "\(alarm.name) \(alarm.timeString) [\(strengthLabel)\(repeatLabel)]"
+            let mi = NSMenuItem(title: label, action: #selector(toggleAlarmItem(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.tag = index
+            mi.state = alarm.enabled ? .on : .off
+            alarmMenu.addItem(mi)
+        }
+        alarmMenu.addItem(.separator())
+        let editAlarmItem = NSMenuItem(title: en ? "Edit Alarms..." : "编辑闹钟...", action: #selector(openEditAlarms), keyEquivalent: "")
+        editAlarmItem.target = self
+        alarmMenu.addItem(editAlarmItem)
+        let addAlarmItem = NSMenuItem(title: en ? "Add Alarm..." : "添加闹钟...", action: #selector(openAddAlarm), keyEquivalent: "")
+        addAlarmItem.target = self
+        alarmMenu.addItem(addAlarmItem)
+        menu.addItem(alarmItem)
         menu.addItem(.separator())
 
         let alwaysOnTopItem = NSMenuItem(title: en ? "Always on Top" : "始终置顶", action: #selector(toggleAlwaysOnTop), keyEquivalent: "")
@@ -349,6 +383,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .reminder: interval = 0.4
         case .dragged: interval = 0.3
         case .clicked: interval = 0.4
+        case .attacking: interval = 0.2
+        case .playing: interval = 0.5
+        case .chasingTail: interval = 0.25
         default: interval = 0.6
         }
 
@@ -383,7 +420,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             stopZzzAnimation()
         }
-        if state == .clicked {
+        let showBang = state == .clicked
+            || (state == .attacking && !CatFrames.hasDedicatedSprites(for: .attacking))
+        if showBang {
             showExclamation()
         } else {
             hideExclamation()
@@ -433,7 +472,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func startBehaviorLoop() {
         walkTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             guard let self = self, !self.isReminding else { return }
-            if self.catState == .dragged || self.catState == .clicked { return }
+            if self.catState == .dragged || self.catState == .clicked || self.catState == .attacking { return }
             if self.settings.globalMode == .superDND {
                 if self.catState != .sleeping { self.setCatState(.sleeping) }
                 return
@@ -441,26 +480,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             self.idleCounter += 1
 
-            // Walk: ~10% chance every 5s, only from idle
-            if self.settings.walkingEnabled && self.catState == .idle && Int.random(in: 0..<30) < 3 {
+            // Playing/chasingTail auto-end after ~10-15s
+            if self.catState == .playing && self.idleCounter >= 3 {
                 self.idleCounter = 0
-                self.walkToRandomSpot()
+                self.setCatState(.idle)
+                return
+            }
+            if self.catState == .chasingTail && self.idleCounter >= 2 {
+                self.idleCounter = 0
+                self.setCatState(.idle)
                 return
             }
 
-            // After ~25s idle → lie down (bread loaf)
+            // From idle: random activity
+            if self.catState == .idle {
+                let roll = Int.random(in: 0..<60)
+                // Walk: ~10% chance
+                if self.settings.walkingEnabled && roll < 6 {
+                    self.idleCounter = 0
+                    self.walkToRandomSpot()
+                    return
+                }
+                // Playing: ~5% chance, only if sprites exist
+                if roll >= 6 && roll < 9 && CatFrames.hasDedicatedSprites(for: .playing) {
+                    self.idleCounter = 0
+                    self.setCatState(.playing)
+                    return
+                }
+                // Chasing tail: ~3% chance, only if sprites exist
+                if roll >= 9 && roll < 11 && CatFrames.hasDedicatedSprites(for: .chasingTail) {
+                    self.idleCounter = 0
+                    self.setCatState(.chasingTail)
+                    return
+                }
+            }
+
+            // After ~25s idle → lie down
             if self.catState == .idle && self.idleCounter >= 5 {
                 self.setCatState(.lyingDown)
                 return
             }
 
-            // After ~25s lying → fall asleep (stays in loaf, adds zzZ)
+            // After ~25s lying → fall asleep
             if self.catState == .lyingDown && self.idleCounter >= 10 {
                 self.setCatState(.sleeping)
                 return
             }
 
-            // After ~60s sleeping → wake up, back to idle
+            // After ~60s sleeping → wake up
             if self.catState == .sleeping && self.idleCounter >= 22 {
                 self.idleCounter = 0
                 self.setCatState(.idle)
@@ -494,10 +561,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let dx = target.x - current.x
         let dy = target.y - current.y
         let distance = sqrt(dx * dx + dy * dy)
-        let speed: CGFloat = 5
+        let speed = CGFloat.random(in: 2.5...8.0)
         let steps = max(Int(distance / speed), 1)
-        let stepX = dx / CGFloat(steps)
-        let stepY = dy / CGFloat(steps)
+        let dirX = dx / distance
+        let dirY = dy / distance
         var step = 0
         var pawCounter = 0
 
@@ -512,8 +579,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 completion()
                 return
             }
-            let newX = current.x + stepX * CGFloat(step)
-            let newY = current.y + stepY * CGFloat(step)
+            let t = CGFloat(step) / CGFloat(steps)
+            let eased = t < 0.5
+                ? 2 * t * t
+                : 1 - pow(-2 * t + 2, 2) / 2
+            let traveled = eased * distance
+            let newX = current.x + dirX * traveled
+            let newY = current.y + dirY * traveled
             self.catWindow.setFrameOrigin(NSPoint(x: newX, y: newY))
 
             if leavePawPrints {
@@ -544,9 +616,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func onClicked() {
-        guard catState != .clicked else { return }
+        guard catState != .attacking else { return }
         walkAnimTimer?.invalidate()
         walkAnimTimer = nil
+
+        clickCount += 1
+
+        if clickCount >= attackThreshold {
+            clickCount = 0
+            attackThreshold = Int.random(in: 5...15)
+            playRandomSound()
+            setCatState(.attacking)
+            clickedRestoreTimer?.invalidate()
+            clickedRestoreTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
+                guard let self = self else { return }
+                self.clickedRestoreTimer = nil
+                if self.catState == .attacking {
+                    self.idleCounter = 0
+                    self.setCatState(.idle)
+                }
+            }
+            return
+        }
+
+        guard catState != .clicked else { return }
         let previousState = catState
         setCatState(.clicked)
         clickedRestoreTimer?.invalidate()
@@ -881,16 +974,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         btn.frame = NSRect(x: (cardW - 200) / 2, y: 55, width: 200, height: 40)
         card.addSubview(btn)
 
-        let laterBtn = NSButton(title: L == .english ? "Remind in 5 min" : "5分钟后再提醒", target: self, action: #selector(snoozeReminder))
-        laterBtn.font = .systemFont(ofSize: 13)
-        laterBtn.bezelStyle = .rounded
-        laterBtn.isBordered = false
-        laterBtn.wantsLayer = true
-        laterBtn.layer?.backgroundColor = NSColor(white: 0.92, alpha: 1.0).cgColor
-        laterBtn.layer?.cornerRadius = 8
-        laterBtn.contentTintColor = .darkGray
-        laterBtn.frame = NSRect(x: (cardW - 200) / 2, y: 14, width: 200, height: 30)
-        card.addSubview(laterBtn)
+        let showSnooze = activeHardAlarmItem?.snoozeEnabled ?? true
+        if showSnooze {
+            let laterBtn = NSButton(title: L == .english ? "Remind in 5 min" : "5分钟后再提醒", target: self, action: #selector(snoozeReminder))
+            laterBtn.font = .systemFont(ofSize: 13)
+            laterBtn.bezelStyle = .rounded
+            laterBtn.isBordered = false
+            laterBtn.wantsLayer = true
+            laterBtn.layer?.backgroundColor = NSColor(white: 0.92, alpha: 1.0).cgColor
+            laterBtn.layer?.cornerRadius = 8
+            laterBtn.contentTintColor = .darkGray
+            laterBtn.frame = NSRect(x: (cardW - 200) / 2, y: 14, width: 200, height: 30)
+            card.addSubview(laterBtn)
+        }
 
         overlay.contentView = cv
         overlay.orderFrontRegardless()
@@ -913,6 +1009,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         overlayWindow?.orderOut(nil)
         overlayWindow = nil
         activeHardReminderItem = nil
+        activeHardAlarmItem = nil
         catWindow.level = settings.alwaysOnTop ? .floating : .normal
         isReminding = false
         idleCounter = 0
@@ -920,12 +1017,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func snoozeReminder() {
-        let items = settings.reminders
-        let snoozedItem = items.first(where: { $0.enabled })
-        dismissHardReminder()
-        if let item = snoozedItem {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 300) { [weak self] in
-                self?.showHardReminder(item)
+        if let alarm = activeHardAlarmItem {
+            dismissHardReminder()
+            alarmManager.snooze(alarm)
+        } else {
+            let items = settings.reminders
+            let snoozedItem = items.first(where: { $0.enabled })
+            dismissHardReminder()
+            if let item = snoozedItem {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 300) { [weak self] in
+                    self?.showHardReminder(item)
+                }
             }
         }
     }
@@ -1078,6 +1180,219 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Alarm UI
+
+    @objc private func toggleAlarmItem(_ sender: NSMenuItem) {
+        let items = settings.alarms
+        guard sender.tag < items.count else { return }
+        settings.toggleAlarm(id: items[sender.tag].id)
+        alarmManager.rebuildAlarms()
+        refreshMenu()
+    }
+
+    @objc private func openAddAlarm() {
+        let en = L == .english
+        let alert = NSAlert()
+        alert.messageText = en ? "Add Alarm" : "添加闹钟"
+        alert.addButton(withTitle: en ? "Add" : "添加")
+        alert.addButton(withTitle: en ? "Cancel" : "取消")
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 230))
+
+        let nameLabel = NSTextField(labelWithString: en ? "Name:" : "名称:")
+        nameLabel.frame = NSRect(x: 0, y: 200, width: 90, height: 24)
+        container.addSubview(nameLabel)
+        let nameField = NSTextField(string: "")
+        nameField.frame = NSRect(x: 95, y: 200, width: 240, height: 24)
+        nameField.placeholderString = en ? "Alarm name" : "闹钟名称"
+        container.addSubview(nameField)
+
+        let msgLabel = NSTextField(labelWithString: en ? "Message:" : "提示文字:")
+        msgLabel.frame = NSRect(x: 0, y: 168, width: 90, height: 24)
+        container.addSubview(msgLabel)
+        let msgField = NSTextField(string: "")
+        msgField.frame = NSRect(x: 95, y: 168, width: 240, height: 24)
+        msgField.placeholderString = en ? "Reminder message" : "提示文字"
+        container.addSubview(msgField)
+
+        let timeLabel = NSTextField(labelWithString: en ? "Time:" : "时间:")
+        timeLabel.frame = NSRect(x: 0, y: 136, width: 90, height: 24)
+        container.addSubview(timeLabel)
+        let hourField = NSTextField(string: "09")
+        hourField.frame = NSRect(x: 95, y: 136, width: 40, height: 24)
+        container.addSubview(hourField)
+        let colonLabel = NSTextField(labelWithString: ":")
+        colonLabel.frame = NSRect(x: 138, y: 136, width: 10, height: 24)
+        container.addSubview(colonLabel)
+        let minField = NSTextField(string: "00")
+        minField.frame = NSRect(x: 152, y: 136, width: 40, height: 24)
+        container.addSubview(minField)
+
+        let strengthLabel = NSTextField(labelWithString: en ? "Strength:" : "提醒强度:")
+        strengthLabel.frame = NSRect(x: 0, y: 104, width: 90, height: 24)
+        container.addSubview(strengthLabel)
+        let strengthPopup = NSPopUpButton(frame: NSRect(x: 95, y: 102, width: 160, height: 28))
+        strengthPopup.addItems(withTitles: en ? ["Follow system", "Soft", "Strong"] : ["跟随系统", "软提醒", "强提醒"])
+        container.addSubview(strengthPopup)
+
+        let repeatCheck = NSButton(checkboxWithTitle: en ? "Repeat daily" : "每天重复", target: nil, action: nil)
+        repeatCheck.frame = NSRect(x: 95, y: 72, width: 200, height: 24)
+        repeatCheck.state = .on
+        container.addSubview(repeatCheck)
+
+        let snoozeCheck = NSButton(checkboxWithTitle: en ? "Allow snooze (5 min)" : "允许贪睡（5分钟）", target: nil, action: nil)
+        snoozeCheck.frame = NSRect(x: 95, y: 44, width: 240, height: 24)
+        snoozeCheck.state = .on
+        container.addSubview(snoozeCheck)
+
+        alert.accessoryView = container
+        if alert.runModal() == .alertFirstButtonReturn {
+            let name = nameField.stringValue
+            guard !name.isEmpty else { return }
+            let hour = max(0, min(23, Int(hourField.stringValue) ?? 9))
+            let minute = max(0, min(59, Int(minField.stringValue) ?? 0))
+            let strengthOverride: ReminderStrength?
+            switch strengthPopup.indexOfSelectedItem {
+            case 1: strengthOverride = .soft
+            case 2: strengthOverride = .hard
+            default: strengthOverride = nil
+            }
+            let alarm = AlarmItem(
+                id: UUID(),
+                name: name,
+                message: msgField.stringValue.isEmpty ? "\(name)!" : msgField.stringValue,
+                hour: hour,
+                minute: minute,
+                strengthOverride: strengthOverride,
+                repeatDaily: repeatCheck.state == .on,
+                snoozeEnabled: snoozeCheck.state == .on,
+                enabled: true
+            )
+            settings.addAlarm(alarm)
+            alarmManager.rebuildAlarms()
+            refreshMenu()
+        }
+    }
+
+    @objc private func openEditAlarms() {
+        let en = L == .english
+        let items = settings.alarms
+        guard !items.isEmpty else { return }
+
+        let alert = NSAlert()
+        alert.messageText = en ? "Edit Alarms" : "编辑闹钟"
+        alert.informativeText = en ? "Choose an alarm to edit:" : "选择要编辑的闹钟："
+        for alarm in items {
+            alert.addButton(withTitle: "\(alarm.name) \(alarm.timeString)")
+        }
+        alert.addButton(withTitle: en ? "Delete Alarm..." : "删除闹钟...")
+        alert.addButton(withTitle: en ? "Cancel" : "取消")
+
+        let response = alert.runModal()
+        let idx = response.rawValue - 1000
+        if idx < items.count {
+            editAlarmDialog(items[idx])
+        } else if idx == items.count {
+            deleteAlarmDialog()
+        }
+    }
+
+    private func editAlarmDialog(_ alarm: AlarmItem) {
+        let en = L == .english
+        let alert = NSAlert()
+        alert.messageText = (en ? "Edit: " : "编辑: ") + alarm.name
+        alert.addButton(withTitle: en ? "Save" : "保存")
+        alert.addButton(withTitle: en ? "Cancel" : "取消")
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 230))
+
+        let nameLabel = NSTextField(labelWithString: en ? "Name:" : "名称:")
+        nameLabel.frame = NSRect(x: 0, y: 200, width: 90, height: 24)
+        container.addSubview(nameLabel)
+        let nameField = NSTextField(string: alarm.name)
+        nameField.frame = NSRect(x: 95, y: 200, width: 240, height: 24)
+        container.addSubview(nameField)
+
+        let msgLabel = NSTextField(labelWithString: en ? "Message:" : "提示文字:")
+        msgLabel.frame = NSRect(x: 0, y: 168, width: 90, height: 24)
+        container.addSubview(msgLabel)
+        let msgField = NSTextField(string: alarm.message)
+        msgField.frame = NSRect(x: 95, y: 168, width: 240, height: 24)
+        container.addSubview(msgField)
+
+        let timeLabel = NSTextField(labelWithString: en ? "Time:" : "时间:")
+        timeLabel.frame = NSRect(x: 0, y: 136, width: 90, height: 24)
+        container.addSubview(timeLabel)
+        let hourField = NSTextField(string: String(format: "%02d", alarm.hour))
+        hourField.frame = NSRect(x: 95, y: 136, width: 40, height: 24)
+        container.addSubview(hourField)
+        let colonLabel = NSTextField(labelWithString: ":")
+        colonLabel.frame = NSRect(x: 138, y: 136, width: 10, height: 24)
+        container.addSubview(colonLabel)
+        let minField = NSTextField(string: String(format: "%02d", alarm.minute))
+        minField.frame = NSRect(x: 152, y: 136, width: 40, height: 24)
+        container.addSubview(minField)
+
+        let strengthLabel = NSTextField(labelWithString: en ? "Strength:" : "提醒强度:")
+        strengthLabel.frame = NSRect(x: 0, y: 104, width: 90, height: 24)
+        container.addSubview(strengthLabel)
+        let strengthPopup = NSPopUpButton(frame: NSRect(x: 95, y: 102, width: 160, height: 28))
+        strengthPopup.addItems(withTitles: en ? ["Follow system", "Soft", "Strong"] : ["跟随系统", "软提醒", "强提醒"])
+        if let s = alarm.strengthOverride {
+            strengthPopup.selectItem(at: s == .soft ? 1 : 2)
+        }
+        container.addSubview(strengthPopup)
+
+        let repeatCheck = NSButton(checkboxWithTitle: en ? "Repeat daily" : "每天重复", target: nil, action: nil)
+        repeatCheck.frame = NSRect(x: 95, y: 72, width: 200, height: 24)
+        repeatCheck.state = alarm.repeatDaily ? .on : .off
+        container.addSubview(repeatCheck)
+
+        let snoozeCheck = NSButton(checkboxWithTitle: en ? "Allow snooze (5 min)" : "允许贪睡（5分钟）", target: nil, action: nil)
+        snoozeCheck.frame = NSRect(x: 95, y: 44, width: 240, height: 24)
+        snoozeCheck.state = alarm.snoozeEnabled ? .on : .off
+        container.addSubview(snoozeCheck)
+
+        alert.accessoryView = container
+        if alert.runModal() == .alertFirstButtonReturn {
+            var updated = alarm
+            updated.name = nameField.stringValue
+            updated.message = msgField.stringValue
+            updated.hour = max(0, min(23, Int(hourField.stringValue) ?? alarm.hour))
+            updated.minute = max(0, min(59, Int(minField.stringValue) ?? alarm.minute))
+            switch strengthPopup.indexOfSelectedItem {
+            case 1: updated.strengthOverride = .soft
+            case 2: updated.strengthOverride = .hard
+            default: updated.strengthOverride = nil
+            }
+            updated.repeatDaily = repeatCheck.state == .on
+            updated.snoozeEnabled = snoozeCheck.state == .on
+            settings.updateAlarm(updated)
+            alarmManager.rebuildAlarms()
+            refreshMenu()
+        }
+    }
+
+    private func deleteAlarmDialog() {
+        let en = L == .english
+        let items = settings.alarms
+        let alert = NSAlert()
+        alert.messageText = en ? "Delete Alarm" : "删除闹钟"
+        alert.informativeText = en ? "Choose an alarm to delete:" : "选择要删除的闹钟："
+        for alarm in items {
+            alert.addButton(withTitle: (en ? "Delete " : "删除 ") + alarm.name)
+        }
+        alert.addButton(withTitle: en ? "Cancel" : "取消")
+
+        let response = alert.runModal()
+        let idx = response.rawValue - 1000
+        if idx < items.count {
+            settings.removeAlarm(id: items[idx].id)
+            alarmManager.rebuildAlarms()
+            refreshMenu()
+        }
+    }
+
     // MARK: - Actions
 
     @objc private func toggleCat() {
@@ -1155,5 +1470,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: ReminderManagerDelegate {
     func reminderTriggered(_ item: ReminderItem, strength: ReminderStrength) {
         showReminder(item, strength: strength)
+    }
+}
+
+extension AppDelegate: AlarmManagerDelegate {
+    func alarmTriggered(_ alarm: AlarmItem, strength: ReminderStrength) {
+        guard !isReminding else { return }
+        let pseudo = ReminderItem(
+            id: alarm.id,
+            name: alarm.name,
+            shortMessage: alarm.message,
+            urgentMessage: "⏰ \(alarm.message)",
+            intervalMinutes: 0,
+            enabled: true
+        )
+        if strength == .hard {
+            activeHardAlarmItem = alarm
+            showHardReminder(pseudo)
+        } else {
+            showSoftReminder(pseudo)
+        }
     }
 }

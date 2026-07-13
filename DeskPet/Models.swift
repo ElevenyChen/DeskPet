@@ -11,6 +11,9 @@ enum CatState: String {
     case reminder
     case dragged
     case clicked
+    case attacking
+    case playing
+    case chasingTail
 }
 
 struct ReminderItem: Codable, Identifiable {
@@ -32,9 +35,25 @@ struct ReminderItem: Codable, Identifiable {
     ]
 }
 
-enum ReminderStrength: Int {
+enum ReminderStrength: Int, Codable {
     case soft = 0
     case hard = 1
+}
+
+struct AlarmItem: Codable, Identifiable {
+    var id: UUID
+    var name: String
+    var message: String
+    var hour: Int
+    var minute: Int
+    var strengthOverride: ReminderStrength?
+    var repeatDaily: Bool
+    var snoozeEnabled: Bool
+    var enabled: Bool
+
+    var timeString: String {
+        String(format: "%02d:%02d", hour, minute)
+    }
 }
 
 enum AppLanguage: Int, CaseIterable {

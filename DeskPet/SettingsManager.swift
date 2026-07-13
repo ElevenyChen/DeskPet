@@ -6,6 +6,7 @@ class SettingsManager {
 
     private let defaults = UserDefaults.standard
     private let remindersKey = "customReminders"
+    private let alarmsKey = "customAlarms"
 
     var globalMode: GlobalMode {
         get { GlobalMode(rawValue: defaults.integer(forKey: "globalMode")) ?? .normal }
@@ -106,5 +107,56 @@ class SettingsManager {
         case .quiet: return .soft
         case .superDND: return nil
         }
+    }
+
+    // MARK: - Alarms
+
+    var alarms: [AlarmItem] {
+        get {
+            guard let data = defaults.data(forKey: alarmsKey),
+                  let items = try? JSONDecoder().decode([AlarmItem].self, from: data) else {
+                return []
+            }
+            return items
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: alarmsKey)
+            }
+        }
+    }
+
+    func addAlarm(_ item: AlarmItem) {
+        var list = alarms
+        list.append(item)
+        alarms = list
+    }
+
+    func updateAlarm(_ item: AlarmItem) {
+        var list = alarms
+        if let idx = list.firstIndex(where: { $0.id == item.id }) {
+            list[idx] = item
+            alarms = list
+        }
+    }
+
+    func removeAlarm(id: UUID) {
+        var list = alarms
+        list.removeAll { $0.id == id }
+        alarms = list
+    }
+
+    func toggleAlarm(id: UUID) {
+        var list = alarms
+        if let idx = list.firstIndex(where: { $0.id == id }) {
+            list[idx].enabled.toggle()
+            alarms = list
+        }
+    }
+
+    func effectiveAlarmStrength(for alarm: AlarmItem) -> ReminderStrength? {
+        if globalMode == .superDND { return nil }
+        if let override = alarm.strengthOverride { return override }
+        return globalMode.strength
     }
 }

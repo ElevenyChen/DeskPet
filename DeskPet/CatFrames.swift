@@ -17,6 +17,9 @@ struct CatFrames {
         case .reminder: return "reminder"
         case .dragged: return "dragged"
         case .clicked: return "clicked"
+        case .attacking: return "attacking"
+        case .playing: return "playing"
+        case .chasingTail: return "chasing_tail"
         }
     }
 
@@ -67,7 +70,7 @@ struct CatFrames {
 
         if let frames = loadFrames(from: dir) { return frames }
 
-        if state == .clicked {
+        if state == .clicked || state == .attacking || state == .playing || state == .chasingTail {
             return pngFrames(for: .idle)
         }
         return nil
@@ -77,6 +80,14 @@ struct CatFrames {
         let groups = actionGroups(for: state)
         guard !groups.isEmpty else { return nil }
         return groups[Int.random(in: 0..<groups.count)]
+    }
+
+    static func hasDedicatedSprites(for state: CatState) -> Bool {
+        guard let base = spritesDir else { return false }
+        let dir = "\(base)/\(folderName(for: state))"
+        if loadFrames(from: dir) != nil { return true }
+        let groups = actionGroups(for: state)
+        return !groups.isEmpty
     }
 
     static func pawPrintImage() -> NSImage? {
@@ -101,6 +112,9 @@ struct CatFrames {
         case .reminder: return reminder
         case .dragged: return dragged
         case .clicked: return clicked
+        case .attacking: return attacking
+        case .playing: return playing
+        case .chasingTail: return chasingTail
         }
     }
 
@@ -325,6 +339,99 @@ struct CatFrames {
   > ^ <
  /|   |\\
 (_|   |_)
+""",
+    ]
+
+    static let attacking: [String] = [
+"""
+  /\\_/\\  ☆
+ ( >o< )つ
+  > ^ <  /
+ /|   |\\|
+(_|   |_)
+""",
+"""
+  /\\_/\\ ★
+ ( >□< )つ≡≡
+  > ^ <
+ /|   |\\
+(_|   |_)
+""",
+"""
+  /\\_/\\   ☆
+ ( >o< )つ/
+  > ^ < |
+ /|   |\\
+(_|   |_)
+""",
+"""
+  /\\_/\\  ★★
+ ( >`< )つ≡
+  > ^ <
+  |   |/
+(_|   |_)
+""",
+    ]
+
+    static let playing: [String] = [
+"""
+  /\\_/\\   o
+ ( ^.^ ) /
+  > ^ </
+ /|   |\\
+(_|   |_)
+""",
+"""
+  /\\_/\\
+ ( ^o^ )  o
+  > ^ <  /
+ /|   |\\
+(_|   |_)
+""",
+"""
+  /\\_/\\ o
+ ( ^.^ )/
+  > ^ <
+ /|   |\\
+(_|   |_)
+""",
+"""
+  /\\_/\\
+ ( >w< )
+  > ^ <  o
+ /|   |\\ |
+(_|   |_)
+""",
+    ]
+
+    static let chasingTail: [String] = [
+"""
+  /\\_/\\
+ ( @.@ )~
+  > ^ <
+ /|   |\\
+(_|   |_)
+""",
+"""
+     /\\_/\\
+  ~-( @.@ )
+     > ^ <
+    /|   |\\
+   (_|   |_)
+""",
+"""
+  /\\_/\\
+ ( @o@ )-~
+  > ^ <
+ /|   |\\
+(_|   |_)
+""",
+"""
+       /\\_/\\
+  ~~( @.@ )
+      > ^ <
+     /|   |\\
+    (_|   |_)
 """,
     ]
 
