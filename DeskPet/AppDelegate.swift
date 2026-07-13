@@ -386,6 +386,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .attacking: interval = 0.2
         case .playing: interval = 0.5
         case .chasingTail: interval = 0.25
+        case .bellyUp: interval = 0.6
+        case .grooming: interval = 0.7
         default: interval = 0.6
         }
 
@@ -491,27 +493,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.setCatState(.idle)
                 return
             }
+            if self.catState == .bellyUp && self.idleCounter >= 3 {
+                self.idleCounter = 0
+                self.setCatState(.idle)
+                return
+            }
+            if self.catState == .grooming && self.idleCounter >= 4 {
+                self.idleCounter = 0
+                self.setCatState(.idle)
+                return
+            }
 
             // From idle: random activity
             if self.catState == .idle {
-                let roll = Int.random(in: 0..<60)
-                // Walk: ~10% chance
-                if self.settings.walkingEnabled && roll < 6 {
-                    self.idleCounter = 0
-                    self.walkToRandomSpot()
-                    return
+                var actions: [(weight: Int, action: () -> Void)] = []
+                if self.settings.walkingEnabled {
+                    actions.append((6, { self.walkToRandomSpot() }))
                 }
-                // Playing: ~5% chance, only if sprites exist
-                if roll >= 6 && roll < 9 && CatFrames.hasDedicatedSprites(for: .playing) {
-                    self.idleCounter = 0
-                    self.setCatState(.playing)
-                    return
+                if CatFrames.hasDedicatedSprites(for: .playing) {
+                    actions.append((3, { self.setCatState(.playing) }))
                 }
-                // Chasing tail: ~3% chance, only if sprites exist
-                if roll >= 9 && roll < 11 && CatFrames.hasDedicatedSprites(for: .chasingTail) {
-                    self.idleCounter = 0
-                    self.setCatState(.chasingTail)
-                    return
+                if CatFrames.hasDedicatedSprites(for: .chasingTail) {
+                    actions.append((2, { self.setCatState(.chasingTail) }))
+                }
+                if CatFrames.hasDedicatedSprites(for: .bellyUp) {
+                    actions.append((2, { self.setCatState(.bellyUp) }))
+                }
+                if CatFrames.hasDedicatedSprites(for: .grooming) {
+                    actions.append((3, { self.setCatState(.grooming) }))
+                }
+                if !actions.isEmpty {
+                    let totalWeight = actions.reduce(0) { $0 + $1.weight }
+                    let roll = Int.random(in: 0..<max(totalWeight * 4, 60))
+                    var cumulative = 0
+                    for (weight, action) in actions {
+                        cumulative += weight
+                        if roll < cumulative {
+                            self.idleCounter = 0
+                            action()
+                            return
+                        }
+                    }
                 }
             }
 

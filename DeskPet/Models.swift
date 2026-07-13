@@ -14,6 +14,8 @@ enum CatState: String {
     case attacking
     case playing
     case chasingTail
+    case bellyUp
+    case grooming
 }
 
 struct ReminderItem: Codable, Identifiable {

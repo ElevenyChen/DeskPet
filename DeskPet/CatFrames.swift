@@ -20,6 +20,8 @@ struct CatFrames {
         case .attacking: return "attacking"
         case .playing: return "playing"
         case .chasingTail: return "chasing_tail"
+        case .bellyUp: return "belly_up"
+        case .grooming: return "grooming"
         }
     }
 
@@ -70,7 +72,10 @@ struct CatFrames {
 
         if let frames = loadFrames(from: dir) { return frames }
 
-        if state == .clicked || state == .attacking || state == .playing || state == .chasingTail {
+        if state == .clicked {
+            return pngFrames(for: .reminder) ?? pngFrames(for: .idle)
+        }
+        if state == .attacking || state == .playing || state == .chasingTail || state == .bellyUp || state == .grooming {
             return pngFrames(for: .idle)
         }
         return nil
@@ -115,6 +120,8 @@ struct CatFrames {
         case .attacking: return attacking
         case .playing: return playing
         case .chasingTail: return chasingTail
+        case .bellyUp: return bellyUp
+        case .grooming: return grooming
         }
     }
 
@@ -432,6 +439,68 @@ struct CatFrames {
       > ^ <
      /|   |\\
     (_|   |_)
+""",
+    ]
+
+    static let bellyUp: [String] = [
+"""
+         /\\_/\\
+    ____( ^.^ )
+   |  \\ __ /  |~
+   | /      \\ |
+   |__________|
+""",
+"""
+         /\\_/\\
+    ____( >w< )
+  ~|  \\ __ /  |
+   | /      \\ |
+   |__________|
+""",
+"""
+         /\\_/\\
+    ____( ^o^ )
+   |  \\ __ /  |~
+   | /      \\ |
+   |__________|
+""",
+"""
+         /\\_/\\
+    ____( -.- )
+  ~|  \\ __ /  |
+   | /      \\ |
+   |__________|
+""",
+    ]
+
+    static let grooming: [String] = [
+"""
+  /\\_/\\
+ ( -.- )
+  > ^ <
+ /| _ |\\
+(_|/ \\|_)
+""",
+"""
+  /\\_/\\
+ ( -.-)>
+  > ^ < |
+ /|   |\\|
+(_|   |_)
+""",
+"""
+  /\\_/\\
+ ( u.u )
+  > ^ <
+ /| _ |\\
+(_|/ \\|_)
+""",
+"""
+  /\\_/\\
+ (>-.- )
+ | > ^ <
+ |/|   |\\
+(_|   |_)
 """,
     ]
 

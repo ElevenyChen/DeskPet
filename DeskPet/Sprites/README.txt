@@ -153,6 +153,18 @@ chasing_tail/   Cat spinning to chase its own tail (randomly triggered from idle
                 Frame rate: 0.25s per frame
                 This state only triggers if sprites exist in this folder.
 
+belly_up/       Cat rolling over to show its belly (randomly triggered from idle).
+                Suggested: 2-4 frames (rolling over, paws in the air, wiggling)
+                Frame rate: 0.6s per frame
+                This state only triggers if sprites exist in this folder.
+                Great for groups: quick_roll, lazy_stretch, happy_wiggle
+
+grooming/       Cat grooming itself — licking paw, licking fur (randomly triggered from idle).
+                Suggested: 3-6 frames (licking paw, washing face, licking side)
+                Frame rate: 0.7s per frame
+                This state only triggers if sprites exist in this folder.
+                Great for groups: lick_paw, lick_fur, wash_face
+
 paw_print/      Footprint left behind while walking.
                 Only uses 0.png (single image, not animated).
                 Suggested: 20x16 px, very small
