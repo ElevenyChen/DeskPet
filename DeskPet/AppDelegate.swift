@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var walkTimer: Timer?
     private var idleCounter = 0
     var isReminding = false
+    var isAttacking: Bool { catState == .attacking }
 
     private var pawPrintWindows: [NSWindow] = []
     private var overlayWindow: NSWindow?
@@ -31,7 +32,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var walkAnimTimer: Timer?
     private var stateBeforeDrag: CatState?
     private var customSounds: [NSSound] = []
-    private var clickedRestoreTimer: Timer?
     private var clickCount = 0
     private var attackThreshold = Int.random(in: 5...15)
 
@@ -169,6 +169,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         slider.target = self
         slider.action = #selector(catScaleChanged(_:))
         slider.isContinuous = true
+        slider.trackFillColor = .controlAccentColor
         sliderView.addSubview(slider)
         sliderItem.view = sliderView
         menu.addItem(sliderItem)
@@ -391,14 +392,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         default: interval = 0.6
         }
 
-        animTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
+        animTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
             if self.usingPNG, let pf = CatFrames.pngFrames(for: self.catState, group: self.currentSpriteGroup), !pf.isEmpty {
-                self.frameIndex = (self.frameIndex + 1) % pf.count
+                let nextFrame = self.frameIndex + 1
+                if self.catState == .attacking && nextFrame >= pf.count {
+                    timer.invalidate()
+                    self.animTimer = nil
+                    self.idleCounter = 0
+                    self.setCatState(.idle)
+                    return
+                }
+                self.frameIndex = nextFrame % pf.count
                 self.catImageView.image = pf[self.frameIndex]
             } else {
                 let frames = CatFrames.frames(for: self.catState)
-                self.frameIndex = (self.frameIndex + 1) % frames.count
+                let nextFrame = self.frameIndex + 1
+                if self.catState == .attacking && nextFrame >= frames.count {
+                    timer.invalidate()
+                    self.animTimer = nil
+                    self.idleCounter = 0
+                    self.setCatState(.idle)
+                    return
+                }
+                self.frameIndex = nextFrame % frames.count
                 self.catTextField.stringValue = frames[self.frameIndex]
             }
         }
@@ -422,8 +439,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             stopZzzAnimation()
         }
-        let showBang = state == .clicked
-            || (state == .attacking && !CatFrames.hasDedicatedSprites(for: .attacking))
+        let showBang = state == .attacking && !CatFrames.hasDedicatedSprites(for: .attacking)
         if showBang {
             showExclamation()
         } else {
@@ -524,7 +540,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 if !actions.isEmpty {
                     let totalWeight = actions.reduce(0) { $0 + $1.weight }
-                    let roll = Int.random(in: 0..<max(totalWeight * 4, 60))
+                    let roll = Int.random(in: 0..<totalWeight * 3)
                     var cumulative = 0
                     for (weight, action) in actions {
                         cumulative += weight
@@ -649,33 +665,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             attackThreshold = Int.random(in: 5...15)
             playRandomSound()
             setCatState(.attacking)
-            clickedRestoreTimer?.invalidate()
-            clickedRestoreTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
-                guard let self = self else { return }
-                self.clickedRestoreTimer = nil
-                if self.catState == .attacking {
-                    self.idleCounter = 0
-                    self.setCatState(.idle)
-                }
-            }
             return
-        }
-
-        guard catState != .clicked else { return }
-        let previousState = catState
-        setCatState(.clicked)
-        clickedRestoreTimer?.invalidate()
-        clickedRestoreTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            self.clickedRestoreTimer = nil
-            if self.catState == .clicked {
-                self.idleCounter = 0
-                if previousState == .walkingLeft || previousState == .walkingRight {
-                    self.walkToRandomSpot()
-                } else {
-                    self.setCatState(.idle)
-                }
-            }
         }
     }
 

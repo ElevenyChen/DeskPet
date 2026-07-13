@@ -23,7 +23,7 @@ class DraggableCatView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if appDelegate?.isReminding == true { return }
+        if appDelegate?.isReminding == true || appDelegate?.isAttacking == true { return }
         isDragging = true
         dragConfirmed = false
         lastScreenPoint = NSEvent.mouseLocation
