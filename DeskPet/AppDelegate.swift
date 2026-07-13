@@ -24,6 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var pawPrintWindows: [NSWindow] = []
     private var overlayWindow: NSWindow?
     private var originalCatWindowFrame: NSRect?
+    private var activeHardReminderItem: ReminderItem?
     private var scaleTimer: Timer?
     private var walkAnimTimer: Timer?
     private var stateBeforeDrag: CatState?
@@ -719,10 +720,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard !isReminding else { return }
         dismissBubble()
         isReminding = true
+        activeHardReminderItem = item
 
         playRandomSound()
 
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.main else {
+            isReminding = false
+            activeHardReminderItem = nil
+            return
+        }
         let catSize = catWindow.frame.size
         let goingRight = screen.frame.midX > catWindow.frame.origin.x
         setCatState(goingRight ? .walkingRight : .walkingLeft)
@@ -733,7 +739,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         animateWalkTo(centerTarget, leavePawPrints: true) { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, self.isReminding else { return }
             self.setCatState(.reminder)
             self.originalCatWindowFrame = self.catWindow.frame
             self.animateScaleUp(screen: screen, item: item)
@@ -747,7 +753,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var step = 0
 
         scaleTimer = Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { [weak self] timer in
-            guard let self = self else { timer.invalidate(); return }
+            guard let self = self, self.isReminding else { timer.invalidate(); return }
             step += 1
             if step >= steps {
                 timer.invalidate()
@@ -817,6 +823,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showBlockingOverlay(_ item: ReminderItem, screen: NSScreen) {
+        overlayWindow?.orderOut(nil)
+        overlayWindow = nil
+
         let sf = screen.frame
 
         let overlay = OverlayWindow(
@@ -897,8 +906,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func dismissHardReminder() {
+        walkAnimTimer?.invalidate()
+        walkAnimTimer = nil
+        scaleTimer?.invalidate()
+        scaleTimer = nil
         overlayWindow?.orderOut(nil)
         overlayWindow = nil
+        activeHardReminderItem = nil
         catWindow.level = settings.alwaysOnTop ? .floating : .normal
         isReminding = false
         idleCounter = 0
