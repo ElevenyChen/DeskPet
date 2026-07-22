@@ -34,6 +34,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var customSounds: [NSSound] = []
     private var clickCount = 0
     private var attackThreshold = Int.random(in: 5...15)
+    private var playWiggleTimer: Timer?
+    private var playDir: CGFloat = 1
+    private var playDirTicks = 0
+    private var isRushing = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -380,7 +384,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         switch catState {
         case .sleeping: interval = 0.8
         case .lyingDown: interval = 1.0
-        case .walkingLeft, .walkingRight: interval = 0.25
+        case .walkingLeft, .walkingRight: interval = isRushing ? 0.1 : 0.25
         case .reminder: interval = 0.4
         case .dragged: interval = 0.3
         case .clicked: interval = 0.4
@@ -439,6 +443,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             stopZzzAnimation()
         }
+        if state == .playing {
+            startPlayWiggle()
+        } else {
+            stopPlayWiggle()
+        }
         let showBang = state == .attacking && !CatFrames.hasDedicatedSprites(for: .attacking)
         if showBang {
             showExclamation()
@@ -471,6 +480,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         zzzTimer?.invalidate()
         zzzTimer = nil
         zzzLabel.alphaValue = 0
+    }
+
+    // While playing, dart left/right (with occasional pounce) so she looks
+    // like a real cat chasing something rather than animating in place.
+    private func startPlayWiggle() {
+        playWiggleTimer?.invalidate()
+        playDirTicks = 0
+        playWiggleTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: true) { [weak self] _ in
+            guard let self = self, self.catState == .playing, let screen = NSScreen.main else { return }
+            let vis = screen.visibleFrame
+            let catSize = self.catWindow.frame.size
+            let current = self.catWindow.frame.origin
+
+            // Keep the same direction for a few ticks, then flip — like tracking prey.
+            if self.playDirTicks <= 0 {
+                self.playDir = Bool.random() ? 1 : -1
+                self.playDirTicks = Int.random(in: 2...5)
+            }
+            self.playDirTicks -= 1
+
+            // Mostly small darts, occasionally a bigger pounce.
+            let mag = Int.random(in: 0..<9) == 0 ? CGFloat.random(in: 20...38) : CGFloat.random(in: 4...13)
+            var newX = current.x + self.playDir * mag
+            // Bounce off screen edges instead of sticking.
+            if newX < vis.minX || newX > vis.maxX - catSize.width {
+                self.playDir *= -1
+                newX = current.x + self.playDir * mag
+            }
+            newX = min(max(newX, vis.minX), vis.maxX - catSize.width)
+
+            var newY = current.y
+            if Int.random(in: 0..<6) == 0 {
+                newY = min(max(current.y + CGFloat.random(in: -8...8), vis.minY), vis.maxY - catSize.height)
+            }
+            self.catWindow.setFrameOrigin(NSPoint(x: newX, y: newY))
+        }
+    }
+
+    private func stopPlayWiggle() {
+        playWiggleTimer?.invalidate()
+        playWiggleTimer = nil
     }
 
     private func showExclamation() {
@@ -525,6 +575,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 var actions: [(weight: Int, action: () -> Void)] = []
                 if self.settings.walkingEnabled {
                     actions.append((6, { self.walkToRandomSpot() }))
+                    actions.append((2, { self.suddenRush() }))
                 }
                 if CatFrames.hasDedicatedSprites(for: .playing) {
                     actions.append((3, { self.setCatState(.playing) }))
@@ -594,20 +645,76 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func animateWalkTo(_ target: NSPoint, leavePawPrints: Bool, completion: @escaping () -> Void) {
+    // A sudden excited dash: 1-3 fast bursts with a brief pause between them,
+    // like a real cat getting the zoomies.
+    private func suddenRush() {
+        guard settings.walkingEnabled, NSScreen.main != nil else {
+            idleCounter = 0
+            setCatState(.idle)
+            return
+        }
+        isRushing = true
+        performRushSegment(remaining: Int.random(in: 1...3))
+    }
+
+    private func performRushSegment(remaining: Int) {
+        guard remaining > 0, let screen = NSScreen.main else {
+            isRushing = false
+            idleCounter = 0
+            setCatState(.idle)
+            return
+        }
+        let vis = screen.visibleFrame
+        let catSize = catWindow.frame.size
+        let current = catWindow.frame.origin
+
+        let dashDist = CGFloat.random(in: 200...440)
+        let roomRight = (vis.maxX - catSize.width) - current.x
+        let roomLeft = current.x - vis.minX
+        let goRight: Bool
+        if roomRight < dashDist * 0.4 {
+            goRight = false
+        } else if roomLeft < dashDist * 0.4 {
+            goRight = true
+        } else {
+            goRight = Bool.random()
+        }
+        var targetX = goRight ? current.x + dashDist : current.x - dashDist
+        targetX = min(max(targetX, vis.minX), vis.maxX - catSize.width)
+        var targetY = current.y + CGFloat.random(in: -30...30)
+        targetY = min(max(targetY, vis.minY), vis.maxY - catSize.height)
+        let target = NSPoint(x: targetX, y: targetY)
+
+        setCatState(goRight ? .walkingRight : .walkingLeft)
+        animateWalkTo(target, leavePawPrints: true, fast: true) { [weak self] in
+            guard let self = self else { return }
+            self.setCatState(.idle)
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 0.2...0.55)) {
+                // Abort the rush if the cat got dragged, reminded, or clicked mid-dash.
+                guard self.isRushing, self.catState == .idle, !self.isReminding else {
+                    self.isRushing = false
+                    return
+                }
+                self.performRushSegment(remaining: remaining - 1)
+            }
+        }
+    }
+
+    private func animateWalkTo(_ target: NSPoint, leavePawPrints: Bool, fast: Bool = false, completion: @escaping () -> Void) {
         let current = catWindow.frame.origin
         let dx = target.x - current.x
         let dy = target.y - current.y
         let distance = sqrt(dx * dx + dy * dy)
-        let speed = CGFloat.random(in: 2.5...8.0)
+        let speed = fast ? CGFloat.random(in: 14...22) : CGFloat.random(in: 2.5...8.0)
         let steps = max(Int(distance / speed), 1)
         let dirX = dx / distance
         let dirY = dy / distance
         var step = 0
         var pawCounter = 0
+        let interval: TimeInterval = fast ? 0.012 : 0.025
 
         walkAnimTimer?.invalidate()
-        walkAnimTimer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] timer in
+        walkAnimTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] timer in
             guard let self = self else { timer.invalidate(); return }
             step += 1
             if step >= steps {
@@ -618,9 +725,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             let t = CGFloat(step) / CGFloat(steps)
-            let eased = t < 0.5
-                ? 2 * t * t
-                : 1 - pow(-2 * t + 2, 2) / 2
+            // Rush: burst out fast, decelerate into an abrupt stop (ease-out).
+            // Normal walk: smooth ease-in-out.
+            let eased = fast
+                ? 1 - pow(1 - t, 3)
+                : (t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2)
             let traveled = eased * distance
             let newX = current.x + dirX * traveled
             let newY = current.y + dirY * traveled
@@ -655,8 +764,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func onClicked() {
         guard catState != .attacking else { return }
+        // Don't hijack an in-progress walk/rush with click logic.
+        if catState == .walkingLeft || catState == .walkingRight { return }
+        isRushing = false
         walkAnimTimer?.invalidate()
         walkAnimTimer = nil
+
+        // ~18% chance she just gets startled and scurries off instead of engaging.
+        if settings.walkingEnabled, Int.random(in: 0..<100) < 18 {
+            clickCount = 0
+            attackThreshold = Int.random(in: 5...15)
+            playRandomSound()
+            walkAwayShort()
+            return
+        }
 
         clickCount += 1
 
@@ -669,8 +790,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // A short, quick scurry away from the cursor — used when a click startles her.
+    private func walkAwayShort() {
+        guard let screen = NSScreen.main else {
+            setCatState(.idle)
+            return
+        }
+        let vis = screen.visibleFrame
+        let catSize = catWindow.frame.size
+        let current = catWindow.frame.origin
+
+        let dist = CGFloat.random(in: 120...260)
+        let roomRight = (vis.maxX - catSize.width) - current.x
+        let roomLeft = current.x - vis.minX
+        let goRight: Bool
+        if roomRight < dist {
+            goRight = false
+        } else if roomLeft < dist {
+            goRight = true
+        } else {
+            goRight = Bool.random()
+        }
+        var targetX = goRight ? current.x + dist : current.x - dist
+        targetX = min(max(targetX, vis.minX), vis.maxX - catSize.width)
+        let target = NSPoint(x: targetX, y: current.y)
+
+        setCatState(goRight ? .walkingRight : .walkingLeft)
+        animateWalkTo(target, leavePawPrints: true, fast: true) { [weak self] in
+            self?.idleCounter = 0
+            self?.setCatState(.idle)
+        }
+    }
+
     func onDragStart() {
         stateBeforeDrag = catState
+        isRushing = false
         walkAnimTimer?.invalidate()
         walkAnimTimer = nil
         playRandomSound()
