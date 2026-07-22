@@ -35,8 +35,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var clickCount = 0
     private var attackThreshold = Int.random(in: 5...15)
     private var playWiggleTimer: Timer?
-    private var playDir: CGFloat = 1
-    private var playDirTicks = 0
     private var isRushing = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -482,39 +480,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         zzzLabel.alphaValue = 0
     }
 
-    // While playing, dart left/right (with occasional pounce) so she looks
+    // While playing, occasionally shuffle a little left or right so she looks
     // like a real cat chasing something rather than animating in place.
+    // Only when walking is allowed; otherwise she plays in place.
     private func startPlayWiggle() {
         playWiggleTimer?.invalidate()
-        playDirTicks = 0
-        playWiggleTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: true) { [weak self] _ in
-            guard let self = self, self.catState == .playing, let screen = NSScreen.main else { return }
+        guard settings.walkingEnabled else { return }
+        playWiggleTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in
+            guard let self = self, self.catState == .playing, self.settings.walkingEnabled,
+                  let screen = NSScreen.main else { return }
             let vis = screen.visibleFrame
             let catSize = self.catWindow.frame.size
             let current = self.catWindow.frame.origin
 
-            // Keep the same direction for a few ticks, then flip — like tracking prey.
-            if self.playDirTicks <= 0 {
-                self.playDir = Bool.random() ? 1 : -1
-                self.playDirTicks = Int.random(in: 2...5)
-            }
-            self.playDirTicks -= 1
-
-            // Mostly small darts, occasionally a bigger pounce.
-            let mag = Int.random(in: 0..<9) == 0 ? CGFloat.random(in: 20...38) : CGFloat.random(in: 4...13)
-            var newX = current.x + self.playDir * mag
-            // Bounce off screen edges instead of sticking.
-            if newX < vis.minX || newX > vis.maxX - catSize.width {
-                self.playDir *= -1
-                newX = current.x + self.playDir * mag
-            }
+            // Fresh coin flip each time: nudge a little left or right.
+            let dir: CGFloat = Bool.random() ? 1 : -1
+            let mag = CGFloat.random(in: 6...16)
+            var newX = current.x + dir * mag
             newX = min(max(newX, vis.minX), vis.maxX - catSize.width)
-
-            var newY = current.y
-            if Int.random(in: 0..<6) == 0 {
-                newY = min(max(current.y + CGFloat.random(in: -8...8), vis.minY), vis.maxY - catSize.height)
-            }
-            self.catWindow.setFrameOrigin(NSPoint(x: newX, y: newY))
+            self.catWindow.setFrameOrigin(NSPoint(x: newX, y: current.y))
         }
     }
 
