@@ -689,13 +689,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let dx = target.x - current.x
         let dy = target.y - current.y
         let distance = sqrt(dx * dx + dy * dy)
-        let speed = fast ? CGFloat.random(in: 14...22) : CGFloat.random(in: 2.5...8.0)
+        let speed = fast ? CGFloat.random(in: 9...14) : CGFloat.random(in: 2.5...8.0)
         let steps = max(Int(distance / speed), 1)
         let dirX = dx / distance
         let dirY = dy / distance
         var step = 0
         var pawCounter = 0
-        let interval: TimeInterval = fast ? 0.012 : 0.025
+        let interval: TimeInterval = fast ? 0.016 : 0.025
 
         walkAnimTimer?.invalidate()
         walkAnimTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] timer in
