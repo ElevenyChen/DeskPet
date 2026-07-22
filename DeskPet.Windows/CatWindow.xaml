@@ -1,0 +1,35 @@
+<Window x:Class="DeskPet.CatWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DeskPet"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        MouseLeftButtonDown="OnMouseLeftButtonDown">
+
+    <Grid>
+        <!-- RenderOptions keeps pixel art sharp instead of blurring on scale. -->
+        <Image x:Name="CatImage"
+               RenderOptions.BitmapScalingMode="NearestNeighbor"
+               SnapsToDevicePixels="True"
+               Stretch="Uniform" />
+
+        <!-- Overlay for the floating zzZ sleep glyphs (click-through). -->
+        <Canvas x:Name="OverlayCanvas" IsHitTestVisible="False">
+            <TextBlock x:Name="ZzzLabel"
+                       Text="z"
+                       FontSize="18"
+                       FontWeight="Bold"
+                       Foreground="White"
+                       Opacity="0">
+                <TextBlock.Effect>
+                    <DropShadowEffect Color="Black" ShadowDepth="1.5" Direction="315"
+                                      BlurRadius="2" Opacity="0.8" />
+                </TextBlock.Effect>
+            </TextBlock>
+        </Canvas>
+    </Grid>
+</Window>
