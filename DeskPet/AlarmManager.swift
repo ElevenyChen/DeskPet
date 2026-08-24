@@ -20,6 +20,9 @@ class AlarmManager {
         checkTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.tick()
         }
+        if let timer = checkTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
     }
 
     func rebuildAlarms() {
@@ -40,15 +43,18 @@ class AlarmManager {
         }
         lastCheckMinute = encoded
 
+        let weekday = cal.component(.weekday, from: now)
         for alarm in settings.alarms where alarm.enabled {
             let alarmEncoded = alarm.hour * 60 + alarm.minute
             guard encoded == alarmEncoded else { continue }
+            let days = alarm.effectiveWeekdays
+            if !days.isEmpty && !days.contains(weekday) { continue }
             guard !firedToday.contains(alarm.id) else { continue }
             guard let strength = settings.effectiveAlarmStrength(for: alarm) else { continue }
 
             firedToday.insert(alarm.id)
 
-            if !alarm.repeatDaily {
+            if days.isEmpty {
                 var updated = alarm
                 updated.enabled = false
                 settings.updateAlarm(updated)
@@ -74,6 +80,9 @@ class AlarmManager {
             DispatchQueue.main.async {
                 self.delegate?.alarmTriggered(alarm, strength: strength)
             }
+        }
+        if let timer = snoozeTimers[alarm.id] {
+            RunLoop.main.add(timer, forMode: .common)
         }
     }
 }

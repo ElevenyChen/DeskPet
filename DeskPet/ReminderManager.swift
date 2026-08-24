@@ -25,6 +25,9 @@ class ReminderManager {
             timers[itemID] = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
                 self?.fire(itemID: itemID)
             }
+            if let timer = timers[itemID] {
+                RunLoop.main.add(timer, forMode: .common)
+            }
         }
     }
 

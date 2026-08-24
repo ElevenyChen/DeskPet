@@ -32,3 +32,7 @@ deskpet-tauri/src-tauri/gen/
 
 # Reference images (not part of app)
 cat_image/
+
+# Local work logs (never commit)
+worklog*.json
+*.worklog

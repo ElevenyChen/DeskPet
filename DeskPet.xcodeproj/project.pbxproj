@@ -20,6 +20,8 @@
 		AA00000B /* Sprites in Resources */ = {isa = PBXBuildFile; fileRef = AB00000E; };
 		AA00000C /* Sounds in Resources */ = {isa = PBXBuildFile; fileRef = AB00000F; };
 		AA00000D /* AlarmManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000010; };
+		AA00000E /* FocusManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000011; };
+		AA00000F /* DutyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000012; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -39,6 +41,8 @@
 		AB00000E /* Sprites */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sprites; sourceTree = "<group>"; };
 		AB00000F /* Sounds */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sounds; sourceTree = "<group>"; };
 		AB000010 /* AlarmManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmManager.swift; sourceTree = "<group>"; };
+		AB000011 /* FocusManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusManager.swift; sourceTree = "<group>"; };
+		AB000012 /* DutyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DutyManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -78,6 +82,8 @@
 				AB00000E /* Sprites */,
 				AB00000F /* Sounds */,
 				AB000010 /* AlarmManager.swift */,
+				AB000011 /* FocusManager.swift */,
+				AB000012 /* DutyManager.swift */,
 			);
 			path = DeskPet;
 			sourceTree = "<group>";
@@ -167,6 +173,8 @@
 				AA000009 /* main.swift in Sources */,
 				AA00000A /* CatFrames.swift in Sources */,
 				AA00000D /* AlarmManager.swift in Sources */,
+				AA00000E /* FocusManager.swift in Sources */,
+				AA00000F /* DutyManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

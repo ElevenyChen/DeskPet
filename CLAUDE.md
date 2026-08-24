@@ -23,6 +23,8 @@ DeskPet/
 ├── CatWindowController.swift # 旧窗口控制器（当前未使用）
 ├── SettingsManager.swift   # UserDefaults 存储：模式、声音、语言、开机启动、提醒列表、闹钟列表、猫大小
 ├── ReminderManager.swift   # 定时器管理，按 GlobalMode 决定提醒强度
+├── FocusManager.swift      # 番茄钟打卡：会话开始/结束/取消、计划时长到点回调、持久化恢复
+├── DutyManager.swift       # 上/下班 envelope + 休息/私人时间段管理
 ├── AlarmManager.swift      # 闹钟管理，定时检查、按时触发、贪睡
 ├── Info.plist
 ├── DeskPet.entitlements
@@ -84,10 +86,41 @@ DeskPet/
   - **安静模式** → 软提醒：猫头上方气泡窗口，8秒后消失
   - **超级免打扰** → 不提醒，猫一直睡觉
 
+### 番茄钟打卡（专注会话）
+- 面向 ADHD 的「打卡」工具，不是严格 25+5 循环：每次手动开始，选类别 + 时长（或自由模式手动结束）+ 可选备注
+- 类别：🧠深度工作 / 📮行政协调 / 👥会议 / 🗺️规划准备 / 🔧维护整理 / 🧺生活杂务（杂务记录但不计入总工作时长）
+- 时长：自由模式 / 15 / 25 / 45 / 60 / 90 分钟 / 自定义，默认 45
+- **开工和收工都走强提醒动画**（猫走到屏幕中央→放大→白卡片），按钮文字为「开工！」「收工！」，无贪睡按钮
+- 菜单栏图标旁实时显示 emoji + 已工作分钟数（如 🧠23/45），30 秒刷新
+- 菜单显示进行中会话（已 X 分钟），可「结束工作打卡」或「取消本次（不记录）」
+- 工作统计为单一窗口（NSWindow + NSSegmentedControl 今日/本周/本月/今年 内部切换），三层：①边界（上/下班时间、duty span、实际工作、休息、待命、reopen 次数 + 今日形状条 █工作▓休息░待命）②结构（分类别时长次数、段数/平均/最长 = 碎片度）③log；周/月/年视图有上班天数、平均实际工作、平均 duty span、平均下班时间等趋势
+- 会话存 UserDefaults（focusSessions），进行中会话也持久化（activeFocusSession），app 重启自动恢复；计划时长在关闭期间到点则按计划结束时间补记；每次记录同步导出 ~/Library/Application Support/DeskPet/worklog.json（仓库外，不会被 git 提交）
+- 专注 HUD：会话进行中猫头顶悬浮小卡片（catWindow 的 child window，走路/拖拽/缩放都平滑跟随；layoutCatContent 每帧 reposition），每秒刷新：类别+剩余时间（自由模式显示已用）+备注；软提醒气泡出现时气泡叠放在 HUD 上方，两者都可见不重叠
+- 开工/收工通知跟随全局模式：正常=强提醒动画、安静=软气泡+猫叫、超级免打扰=完全静默（playRandomSound 全局在超级免打扰下静音）
+- 开工/收工卡片**就地放大**（不走屏幕中央，避免走路计时器和拖拽打架）；期间猫可拖拽（拖拽会打断放大动画并把卡片显示在放下的位置）；普通强提醒仍走中央且禁止拖拽
+- 所有动画/管理器 Timer 注册到 RunLoop .common 模式，模态弹窗（NSAlert）期间动画不冻结、计时照走
+- 菜单主操作叫「开始任务…」
+- 开始打卡对话框自定义时长字段标注（分钟）
+- 任何结束方式（手动结束/到点/下班带停）都记录 log，无论多短；没有「取消不记录」
+
+### 上/下班（Duty envelope）
+- On duty 表示「工作有权占用注意力」，与「正在计时干活」是两个维度；里面的状态：工作会话（计入 actual work）、休息/私人（手动翻转）、待命 Available/Idle（自动 = 在班且既没干活也没休息）
+- 第一次开始工作会话时若未上班 → 弹「开始今天的上班？」确认后记录 on_duty；若当天已下班 → 弹「你已经下班了，重新开工？」记为 reopen（新 DutyPeriod）
+- 菜单顶部常驻状态：🟢 上班中 · 10:34（休息中）/ ⚪️ 已下班 · 18:47 / ⚪️ 今天还没上班 + 今日工作时长
+- 独立「上班打卡」/「下班打卡…」菜单入口显式切换 on/off duty（已下班再上班会确认 reopen）；间隔提醒（喝水等）与 duty 无关，一直提醒（原「暂停」菜单已移除，提醒开关全部手动控制）
+- 菜单状态行显示粗略在岗时长（🟢 上班中 · 在岗 约 3 小时，半小时取整，不显示打卡时刻）；「今日工作」行精确到分钟；顶栏番茄计时精确；主操作（开始/结束工作）用蓝色加粗 attributedTitle 突出
+- 「下班打卡…」确认框显示今日汇总并问「这是今天最后一次下班吗？」：今天到此结束（final）/ 暂时下班（可能还回来）；final 后再开工才警告并计为「宣布下班后又开工」，非 final 的重新上班静默通过（正常生活结构）
+- 忘记下班被补记的视为 final；统计显示上班段数（duty blocks）和「宣布下班后又开工」次数两个独立指标
+- 休息/私人时间：菜单手动开始/结束；开始工作会话或下班时自动结束休息
+- 忘记下班：下次启动检测到隔天仍 on duty → 弹窗「用最后一段工作结束时间 / 手动输入」，推断值在统计里标 `~`
+- 工作时间窗（默认 9:30–18:00，可改可关）：到点弹「开始上班？」、超时弹下班确认，只提醒、从不自动打卡
+- 菜单栏图标旁：会话中显示 emoji+分钟，休息 ☕️，在班待命 ⏱，下班无
+- 数据：dutyPeriods / breakPeriods 存 UserDefaults
+
 ### 闹钟系统
 - 按具体时间（时:分）触发提醒，区别于按间隔的提醒系统
 - 每个闹钟可独立设置提醒强度（强/软/跟随系统），但超级免打扰模式下始终静音
-- 支持每天重复
+- 每个闹钟可选每周哪几天响（7 个星期几勾选框，全选=每天，全不选=只响一次后自动禁用）；旧数据 weekdays 为 nil 时回退 repeatDaily 语义
 - 支持贪睡（5分钟后再提醒），可按闹钟单独开关
 - 非重复闹钟触发后自动禁用
 - 菜单栏可添加/编辑/删除/开关闹钟
@@ -168,6 +201,13 @@ DeskPet/
 - ReminderManager 为每个 enabled 的 ReminderItem 创建独立 Timer
 - 强度不在 ReminderItem 上设，由 GlobalMode.strength 统一决定
 - schema 变更时需 `defaults delete com.deskpet.cat` 清除旧数据
+
+### 番茄钟实现
+- FocusManager 单例：start/stop/cancel/restoreOnLaunch，计划模式用一次性 Timer 到点触发 focusSessionTimeUp
+- 强提醒复用 showHardReminder：hardReminderButtonTitle 覆盖按钮文字、hardReminderShowsSnooze 隐藏贪睡，dismissHardReminder 时重置
+- 遮罩卡片文字超过 12 字符时字号从 24 降到 18 防溢出
+- 菜单打开时通过 NSMenuDelegate.menuWillOpen 刷新「已 X 分钟」，statusItem.button.imagePosition = .imageLeft 让图标旁能显示计时文字
+- 统计窗口为 NSAlert + NSScrollView/NSTextView（460x300 等宽字体）
 
 ### 闹钟管理器
 - AlarmManager 每 15 秒 tick 检查当前时间是否匹配闹钟
