@@ -8,6 +8,19 @@ class DutyManager {
 
     private let settings = SettingsManager.shared
 
+    // A "workday" runs 05:00 → 05:00 next morning: anything before 5am still
+    // belongs to the previous evening's day (跨夜加班算前一天).
+    static let dayCutoffHour = 5
+
+    static func workdayKey(for date: Date) -> Date {
+        Calendar.current.startOfDay(for: date.addingTimeInterval(-TimeInterval(dayCutoffHour * 3600)))
+    }
+
+    static func workdayInterval(containing date: Date) -> DateInterval {
+        let start = workdayKey(for: date).addingTimeInterval(TimeInterval(dayCutoffHour * 3600))
+        return DateInterval(start: start, duration: 86400)
+    }
+
     var periods: [DutyPeriod] {
         get { settings.dutyPeriods }
         set { settings.dutyPeriods = newValue }
@@ -20,10 +33,8 @@ class DutyManager {
     var isOnDuty: Bool { openPeriod != nil }
 
     func periodsOn(day: Date) -> [DutyPeriod] {
-        let cal = Calendar.current
-        let start = cal.startOfDay(for: day)
-        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return [] }
-        return periods.filter { $0.onDuty >= start && $0.onDuty < end }.sorted { $0.onDuty < $1.onDuty }
+        let interval = DutyManager.workdayInterval(containing: day)
+        return periods.filter { $0.onDuty >= interval.start && $0.onDuty < interval.end }.sorted { $0.onDuty < $1.onDuty }
     }
 
     var hasClockedOutToday: Bool {
@@ -66,10 +77,10 @@ class DutyManager {
         return periods.filter { $0.onDuty > firstFinalOff }.count
     }
 
-    // An open period left over from a previous day (forgot to clock out)
+    // An open period left over from a previous workday (forgot to clock out)
     func staleOpenPeriod() -> DutyPeriod? {
         guard let open = openPeriod else { return nil }
-        return open.onDuty < Calendar.current.startOfDay(for: Date()) ? open : nil
+        return DutyManager.workdayKey(for: open.onDuty) < DutyManager.workdayKey(for: Date()) ? open : nil
     }
 
     func close(id: UUID, at date: Date, inferred: Bool) {
@@ -108,6 +119,16 @@ class DutyManager {
         breaks = list
     }
 
+    // The whole "break" was actually work: drop the record and let the
+    // running stretch start where the break began
+    func convertOpenBreakToWork() {
+        guard let brk = openBreak else { return }
+        var list = breaks
+        list.removeAll { $0.id == brk.id }
+        breaks = list
+        stretchStart = brk.start
+    }
+
     // Retro-insert a break (e.g. confirmed idle time)
     func insertBreak(from: Date, to: Date) {
         var list = breaks
@@ -123,10 +144,8 @@ class DutyManager {
     }
 
     func breaksOn(day: Date) -> [BreakPeriod] {
-        let cal = Calendar.current
-        let start = cal.startOfDay(for: day)
-        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return [] }
-        return breaks.filter { $0.start >= start && $0.start < end }.sorted { $0.start < $1.start }
+        let interval = DutyManager.workdayInterval(containing: day)
+        return breaks.filter { $0.start >= interval.start && $0.start < interval.end }.sorted { $0.start < $1.start }
     }
 
     // MARK: - Active stretch (state-first: clock in → work accumulates by itself)
@@ -139,10 +158,8 @@ class DutyManager {
     var segments: [WorkSegment] { settings.workSegments }
 
     func segmentsOn(day: Date) -> [WorkSegment] {
-        let cal = Calendar.current
-        let start = cal.startOfDay(for: day)
-        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return [] }
-        return segments.filter { $0.start >= start && $0.start < end }.sorted { $0.start < $1.start }
+        let interval = DutyManager.workdayInterval(containing: day)
+        return segments.filter { $0.start >= interval.start && $0.start < interval.end }.sorted { $0.start < $1.start }
     }
 
     @discardableResult
@@ -157,7 +174,7 @@ class DutyManager {
     // Active work = closed segments + the currently running stretch
     func activeWorkMinutes(on day: Date) -> Int {
         var total = segmentsOn(day: day).reduce(0) { $0 + $1.durationMinutes }
-        if let start = stretchStart, Calendar.current.isDate(start, inSameDayAs: day) {
+        if let start = stretchStart, DutyManager.workdayKey(for: start) == DutyManager.workdayKey(for: day) {
             total += max(0, Int(Date().timeIntervalSince(start) / 60))
         }
         return total

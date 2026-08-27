@@ -95,12 +95,14 @@ DeskPet/
 - **Idle 检测**（CGEventSource.secondsSinceLastEventType 多事件类型取 min，无需权限，30s 轮询）：
   - 键鼠 30+ 分钟无活动 → 标记 idle candidate，不自动动数据；回来时问「刚才 X 分钟算休息吗？」→ 算休息则 stretch 在离开时刻截断、补插 BreakPeriod、从现在重新计
   - 2 小时+ 无活动 → 问「结束今天吗？」（下班时间记为离开时刻）/ 算休息 / 还在工作；永不自动下班
+  - 反向保护：休息中但键鼠持续活跃且已休息 30+ 分钟 → 问「还在休息吗？」（其实一直在工作=整段回溯转工作 / 现在回来 / 还在休息），每 30 分钟最多问一次
 - **连续在线提醒**：不间断 stretch 每满 2 小时提醒一次（随机微休息建议：喝水/站起/看窗外/摸猫/走两分钟），强度跟随全局模式
 - 心跳 workHeartbeat 每 30s 更新（在班时）；启动时 reconcileStretchOnLaunch 把陈旧 stretch 按最后心跳收尾；在班但无 stretch（迁移/恢复）则从现在开始计
 - 菜单：状态行 🟢 WORKING · 今日累计 / 🟡 休息中 / ⚪️ 已下班；第二行 今日工作+在岗粗略+下次提醒 ETA；主操作蓝色加粗（上班打卡 / 回来继续工作 / 下班打卡）
 - 顶栏：工作中 ⏱~2.5h（今日累计，半小时制不跳秒）、Deep Focus 🎯mm:ss 秒表、休息 ☕️、下班无
 - 统计：Active work / 🎯 Deep Focus / 休息 / 最长连续在线 / 段数·平均 / duty blocks / 宣布下班后又开工 + 日形状条；周/月/年有平均实际工作、平均 duty span、平均下班时间等
 - 数据：workSegments / activeStretchStart / workHeartbeat 存 UserDefaults；worklog.json 导出 {segments, deepFocus} 两组
+- **5 点日界**（DutyManager.workdayKey/workdayInterval）：凌晨 5 点前算前一天——跨夜加班归前一晚、凌晨 final 下班不影响当天上午打卡、日/周/月/年统计按 5 点边界分组；「下次提醒」ETA 由 ReminderManager 自维护 nextFires（显示时按间隔自愈推进，睡眠唤醒后不再显示 ~0分）
 - 生活提醒（喝水/眼睛等间隔提醒 + 闹钟）完全独立于工作状态，常驻运行
 
 ### 上/下班（Duty envelope）

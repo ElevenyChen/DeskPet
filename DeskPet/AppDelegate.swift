@@ -48,6 +48,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var idlePromptActive = false
     private var overworkNotifiedMark = 0
     private var lastOverworkStretchStart: Date?
+    private var lastBreakNudgeAt: Date?
     private var hardReminderButtonTitle: String?
     private var pendingOverlayItem: ReminderItem?
     private var pendingOverlayScreen: NSScreen?
@@ -70,9 +71,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // (walking, wiggle, rush, drag, reminder scale-up)
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: catWindow, queue: .main) { [weak self] _ in
             self?.repositionFocusHUD()
+            self?.repositionSoftBubble()
         }
         NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: catWindow, queue: .main) { [weak self] _ in
             self?.repositionFocusHUD()
+            self?.repositionSoftBubble()
         }
         reminderManager.delegate = self
         reminderManager.start()
@@ -1067,6 +1070,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         bgView.addSubview(label)
         bw.contentView = bgView
         bw.orderFrontRegardless()
+        catWindow.addChildWindow(bw, ordered: .above)
         bubbleWindow = bw
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
@@ -1075,8 +1079,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func dismissBubble() {
-        bubbleWindow?.orderOut(nil)
+        if let bw = bubbleWindow {
+            catWindow?.removeChildWindow(bw)
+            bw.orderOut(nil)
+        }
         bubbleWindow = nil
+    }
+
+    // Keep the bubble glued above the cat (stacked above the HUD when both show)
+    private func repositionSoftBubble() {
+        guard let bw = bubbleWindow else { return }
+        let catFrame = catWindow.frame
+        var by = catFrame.maxY + 6
+        if let hud = focusHUDWindow, focusManager.currentSession != nil {
+            by = hud.frame.maxY + 6
+        }
+        let size = bw.frame.size
+        bw.setFrame(NSRect(x: catFrame.midX - size.width / 2, y: by, width: size.width, height: size.height), display: false)
     }
 
     private func dismissSoftReminder() {
@@ -1948,18 +1967,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let en = L == .english
         let cal = Calendar.current
         let now = Date()
-        let fallbackInterval = DateInterval(start: cal.startOfDay(for: now), duration: 86400)
+        // All periods honor the 5am workday boundary (跨夜算前一天)
+        let cutoff = TimeInterval(DutyManager.dayCutoffHour * 3600)
+        func shifted(_ di: DateInterval) -> DateInterval {
+            DateInterval(start: di.start.addingTimeInterval(cutoff), end: di.end.addingTimeInterval(cutoff))
+        }
+        let fallbackInterval = DutyManager.workdayInterval(containing: now)
         let interval: DateInterval
         let title: String
         switch tag {
         case 1:
-            interval = cal.dateInterval(of: .weekOfYear, for: now) ?? fallbackInterval
+            interval = (cal.dateInterval(of: .weekOfYear, for: now.addingTimeInterval(-cutoff)).map(shifted)) ?? fallbackInterval
             title = en ? "This Week" : "本周工作统计"
         case 2:
-            interval = cal.dateInterval(of: .month, for: now) ?? fallbackInterval
+            interval = (cal.dateInterval(of: .month, for: now.addingTimeInterval(-cutoff)).map(shifted)) ?? fallbackInterval
             title = en ? "This Month" : "本月工作统计"
         case 3:
-            interval = cal.dateInterval(of: .year, for: now) ?? fallbackInterval
+            interval = (cal.dateInterval(of: .year, for: now.addingTimeInterval(-cutoff)).map(shifted)) ?? fallbackInterval
             title = en ? "This Year" : "今年工作统计"
         default:
             interval = fallbackInterval
@@ -2062,7 +2086,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             var days: [Date] = []
             var seen = Set<Date>()
             for p in duty.periods where interval.contains(p.onDuty) {
-                let day = cal.startOfDay(for: p.onDuty)
+                let day = DutyManager.workdayKey(for: p.onDuty)
                 if seen.insert(day).inserted { days.append(day) }
             }
             var spanSum = 0, spanDays = 0
@@ -2070,11 +2094,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             var reopenSum = 0
             var blocksSum = 0
             for day in days {
-                let periods = duty.periodsOn(day: day)
+                // day is a workday key (00:00); probe inside its 5am window
+                let probe = day.addingTimeInterval(cutoff)
+                let periods = duty.periodsOn(day: probe)
                 guard let first = periods.first else { continue }
                 let stillOn = periods.contains { $0.offDuty == nil }
                 let closedOffs = periods.compactMap { $0.offDuty }
-                let spanEnd: Date? = stillOn ? (cal.isDateInToday(day) ? now : nil) : closedOffs.max()
+                let isCurrentWorkday = day == DutyManager.workdayKey(for: now)
+                let spanEnd: Date? = stillOn ? (isCurrentWorkday ? now : nil) : closedOffs.max()
                 if let e = spanEnd {
                     spanSum += max(0, Int(e.timeIntervalSince(first.onDuty) / 60))
                     spanDays += 1
@@ -2085,7 +2112,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     offDays += 1
                 }
                 blocksSum += periods.count
-                reopenSum += duty.reopensAfterFinal(on: day)
+                reopenSum += duty.reopensAfterFinal(on: probe)
             }
             if !days.isEmpty {
                 lines.append((en ? "Duty days: \(days.count)" : "上班天数：\(days.count) 天"))
@@ -2165,7 +2192,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let unit: Calendar.Component = (tag == 3) ? .month : .day
                 var totals: [Date: Int] = [:]
                 for segment in segments {
-                    guard let bucket = cal.dateInterval(of: unit, for: segment.start)?.start else { continue }
+                    let key = DutyManager.workdayKey(for: segment.start)
+                    let bucket: Date
+                    if unit == .day {
+                        bucket = key
+                    } else {
+                        guard let b = cal.dateInterval(of: unit, for: key)?.start else { continue }
+                        bucket = b
+                    }
                     totals[bucket, default: 0] += segment.durationMinutes
                 }
                 let bucketFmt = DateFormatter()
@@ -2488,6 +2522,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     promptIdleClassification(since: start, minutes: minutes)
                 }
             }
+        } else if let currentBreak = duty.openBreak {
+            // On break, but the keyboard/mouse look busy → probably forgot to resume
+            let breakMin = Int(Date().timeIntervalSince(currentBreak.start) / 60)
+            let nudgedRecently = lastBreakNudgeAt.map { Date().timeIntervalSince($0) < 30 * 60 } ?? false
+            if breakMin >= 30, idle < 120, !nudgedRecently {
+                lastBreakNudgeAt = Date()
+                promptBreakActivity(minutes: breakMin)
+            }
         }
 
         // continuous-online nudge every 2h of unbroken stretch
@@ -2503,6 +2545,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 notifyOverwork(hours: mark * 2)
             }
         }
+    }
+
+    private func promptBreakActivity(minutes: Int) {
+        idlePromptActive = true
+        defer { idlePromptActive = false }
+        let en = L == .english
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = en ? "Still on break?" : "还在休息吗？"
+        alert.informativeText = en
+            ? "You've been on break for \(formatMinutes(minutes)), but the keyboard/mouse look busy — forgot to resume?"
+            : "已经休息 \(formatMinutes(minutes)) 了，但键鼠一直在动——是不是忘了点「回来工作」？"
+        alert.addButton(withTitle: en ? "I've been working (count it as work)" : "其实一直在工作（这段算工作）")
+        alert.addButton(withTitle: en ? "Resume from now" : "现在回来工作")
+        alert.addButton(withTitle: en ? "Still on break" : "还在休息")
+        let duty = DutyManager.shared
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            duty.convertOpenBreakToWork()
+        case .alertSecondButtonReturn:
+            duty.endBreak()
+            duty.stretchStart = Date()
+        default:
+            break
+        }
+        refreshMenu()
+        updateFocusMenuBar()
     }
 
     // Came back after 30+ min away: was that a break, or slow work (waiting on a model)?
@@ -2604,13 +2673,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let stale = duty.staleOpenPeriod() else { return }
         let en = L == .english
         let cal = Calendar.current
-        let dayStart = cal.startOfDay(for: stale.onDuty)
-        let dayEnd = dayStart.addingTimeInterval(86400)
+        let staleWindow = DutyManager.workdayInterval(containing: stale.onDuty)
         let segmentEnds = settings.workSegments
-            .filter { $0.start >= dayStart && $0.start < dayEnd }
+            .filter { staleWindow.contains($0.start) }
             .map { $0.end }
         let sessionEnds = settings.focusSessions
-            .filter { $0.start >= dayStart && $0.start < dayEnd }
+            .filter { staleWindow.contains($0.start) }
             .compactMap { $0.end }
         let fallback = (segmentEnds + sessionEnds).max() ?? stale.onDuty
         let timeFmt = DateFormatter()
@@ -2639,7 +2707,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             manual.accessoryView = field
             if manual.runModal() == .alertFirstButtonReturn,
                let parsed = parseHHMM(field.stringValue) {
-                let date = dayStart.addingTimeInterval(TimeInterval(parsed * 60))
+                // HH:mm within the logical workday: times before 5am belong to the next calendar day
+                let midnight = cal.startOfDay(for: staleWindow.start)
+                var date = midnight.addingTimeInterval(TimeInterval(parsed * 60))
+                if parsed < DutyManager.dayCutoffHour * 60 { date = date.addingTimeInterval(86400) }
                 duty.close(id: stale.id, at: date, inferred: false)
             } else {
                 duty.close(id: stale.id, at: fallback, inferred: true)
