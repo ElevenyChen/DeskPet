@@ -23,8 +23,10 @@ class DraggableCatView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        // Focus clock-in/out cards aren't must-act reminders — the cat stays draggable
-        if appDelegate?.isReminding == true && appDelegate?.isFocusOverlay != true { return }
+        // Focus cards and soft bubbles aren't must-act reminders — the cat stays draggable
+        if appDelegate?.isReminding == true
+            && appDelegate?.isFocusOverlay != true
+            && appDelegate?.isSoftReminderActive != true { return }
         if appDelegate?.isAttacking == true { return }
         isDragging = true
         dragConfirmed = false

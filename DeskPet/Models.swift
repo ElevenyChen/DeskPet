@@ -182,3 +182,55 @@ struct BreakPeriod: Codable, Identifiable {
     var start: Date
     var end: Date?
 }
+
+// Coarse post-hoc labels for auto-tracked work stretches (state-first tracking).
+// Asked lightly at Break / Clock-out — never while working. Default Mixed.
+enum WorkKind: Int, Codable, CaseIterable {
+    case mixed = 0
+    case research = 1
+    case admin = 2
+    case teaching = 3
+    case other = 4
+    case tbd = 5
+
+    var emoji: String {
+        switch self {
+        case .mixed: return "🌀"
+        case .research: return "📚"
+        case .admin: return "📮"
+        case .teaching: return "🧑‍🏫"
+        case .other: return "📦"
+        case .tbd: return "❓"
+        }
+    }
+
+    func displayName(lang: AppLanguage) -> String {
+        switch (self, lang) {
+        case (.mixed, .chinese): return "混合 / 统筹"
+        case (.research, .chinese): return "研究 / 写作"
+        case (.admin, .chinese): return "行政事务"
+        case (.teaching, .chinese): return "教学"
+        case (.other, .chinese): return "其他"
+        case (.tbd, .chinese): return "待定"
+        case (.mixed, .english): return "Mixed / Orchestration"
+        case (.research, .english): return "Research / Writing"
+        case (.admin, .english): return "Admin"
+        case (.teaching, .english): return "Teaching"
+        case (.other, .english): return "Other"
+        case (.tbd, .english): return "TBD"
+        }
+    }
+}
+
+// One auto-tracked stretch of active work: clock-in/resume → break/clock-out
+struct WorkSegment: Codable, Identifiable {
+    var id: UUID
+    var start: Date
+    var end: Date
+    var kind: WorkKind
+    var note: String
+
+    var durationMinutes: Int {
+        max(0, Int(end.timeIntervalSince(start) / 60.0 + 0.5))
+    }
+}

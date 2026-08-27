@@ -181,12 +181,17 @@ class SettingsManager {
         var list = focusSessions
         list.append(session)
         focusSessions = list
-        exportWorkLog(list)
+        exportWorkLog()
+    }
+
+    private struct WorkLogExport: Codable {
+        let segments: [WorkSegment]
+        let deepFocus: [FocusSession]
     }
 
     // Mirror the log to ~/Library/Application Support/DeskPet/worklog.json —
     // outside the repo, so it never gets committed or pushed.
-    private func exportWorkLog(_ sessions: [FocusSession]) {
+    private func exportWorkLog() {
         let fm = FileManager.default
         guard let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
         let dir = base.appendingPathComponent("DeskPet", isDirectory: true)
@@ -194,7 +199,8 @@ class SettingsManager {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(sessions) {
+        let export = WorkLogExport(segments: workSegments, deepFocus: focusSessions)
+        if let data = try? encoder.encode(export) {
             try? data.write(to: dir.appendingPathComponent("worklog.json"))
         }
     }
@@ -239,6 +245,54 @@ class SettingsManager {
                 defaults.set(date, forKey: "focusHeartbeat")
             } else {
                 defaults.removeObject(forKey: "focusHeartbeat")
+            }
+        }
+    }
+
+    // ── State-first tracking: auto-accumulated work segments ──
+
+    var workSegments: [WorkSegment] {
+        get {
+            guard let data = defaults.data(forKey: "workSegments"),
+                  let items = try? JSONDecoder().decode([WorkSegment].self, from: data) else {
+                return []
+            }
+            return items
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: "workSegments")
+            }
+        }
+    }
+
+    func appendWorkSegment(_ segment: WorkSegment) {
+        var list = workSegments
+        list.append(segment)
+        workSegments = list
+        exportWorkLog()
+    }
+
+    // Start of the currently-running active stretch (nil = on break / off duty)
+    var activeStretchStart: Date? {
+        get { defaults.object(forKey: "activeStretchStart") as? Date }
+        set {
+            if let date = newValue {
+                defaults.set(date, forKey: "activeStretchStart")
+            } else {
+                defaults.removeObject(forKey: "activeStretchStart")
+            }
+        }
+    }
+
+    // Updated every ~30s while on duty; lets a relaunch close dangling stretches sanely
+    var workHeartbeat: Date? {
+        get { defaults.object(forKey: "workHeartbeat") as? Date }
+        set {
+            if let date = newValue {
+                defaults.set(date, forKey: "workHeartbeat")
+            } else {
+                defaults.removeObject(forKey: "workHeartbeat")
             }
         }
     }

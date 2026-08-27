@@ -40,6 +40,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var focusStatusTimer: Timer?
     private var hardReminderShowsSnooze = true
     var isFocusOverlay = false
+    var isSoftReminderActive = false
+    private var sleepAfterOverlay = false
+    private var idleCheckTimer: Timer?
+    private var idleCandidateStart: Date?
+    private var idleLongPromptShown = false
+    private var idlePromptActive = false
+    private var overworkNotifiedMark = 0
+    private var lastOverworkStretchStart: Date?
     private var hardReminderButtonTitle: String?
     private var pendingOverlayItem: ReminderItem?
     private var pendingOverlayScreen: NSScreen?
@@ -79,8 +87,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         workWindowTimer = commonTimer(60, repeats: true) { [weak self] _ in
             self?.checkWorkWindow()
         }
+        DutyManager.shared.reconcileStretchOnLaunch()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.checkStaleDutyOnLaunch()
+        }
+        idleCheckTimer = commonTimer(30, repeats: true) { [weak self] _ in
+            self?.checkIdleAndOverwork()
         }
         if focusManager.currentSession != nil {
             showFocusHUD()
@@ -125,47 +137,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.delegate = self
         let en = L == .english
 
-        // ── Duty status: the outer envelope (上/下班) ──
+        // ── Work state (state-first: clock in → tracking runs by itself) ──
         let duty = DutyManager.shared
         let dutyStatus = NSMenuItem(title: dutyStatusLine(), action: nil, keyEquivalent: "")
         dutyStatus.isEnabled = false
         menu.addItem(dutyStatus)
         dutyStatusMenuItem = dutyStatus
-        let todayItem = NSMenuItem(title: todayWorkLine(todayWorkSummary()), action: nil, keyEquivalent: "")
+        let todayItem = NSMenuItem(title: todayWorkLine(), action: nil, keyEquivalent: "")
         todayItem.isEnabled = false
         menu.addItem(todayItem)
         dutyTodayMenuItem = todayItem
         menu.addItem(.separator())
 
-        // primary action: bold + accent so it's easy to find
-        if focusManager.currentSession != nil {
-            let endItem = NSMenuItem(title: "", action: #selector(endFocusFromMenu), keyEquivalent: "")
-            endItem.attributedTitle = highlightedTitle(en ? "⏹ End This Session" : "⏹ 结束这段工作")
-            endItem.target = self
-            menu.addItem(endItem)
-        } else {
-            let startItem = NSMenuItem(title: "", action: #selector(openStartFocus), keyEquivalent: "")
-            startItem.attributedTitle = highlightedTitle(en ? "▶ Start Task..." : "▶ 开始任务...")
-            startItem.target = self
-            menu.addItem(startItem)
-            if duty.isOnDuty {
-                if duty.isOnBreak {
-                    let backItem = NSMenuItem(title: en ? "Back From Break" : "结束休息，回到待命", action: #selector(endBreakFromMenu), keyEquivalent: "")
-                    backItem.target = self
-                    menu.addItem(backItem)
+        if duty.isOnDuty {
+            if duty.isOnBreak {
+                let backItem = NSMenuItem(title: "", action: #selector(endBreakFromMenu), keyEquivalent: "")
+                backItem.attributedTitle = highlightedTitle(en ? "▶ Resume Working" : "▶ 回来继续工作")
+                backItem.target = self
+                menu.addItem(backItem)
+            } else {
+                let breakItem = NSMenuItem(title: en ? "☕️ Break (stepping away)" : "☕️ 休息 / 暂时离开", action: #selector(startBreakFromMenu), keyEquivalent: "")
+                breakItem.target = self
+                menu.addItem(breakItem)
+                if focusManager.currentSession != nil {
+                    let endFocus = NSMenuItem(title: en ? "🎯 End Deep Focus" : "🎯 结束 Deep Focus", action: #selector(endFocusFromMenu), keyEquivalent: "")
+                    endFocus.target = self
+                    menu.addItem(endFocus)
                 } else {
-                    let breakItem = NSMenuItem(title: en ? "Break / Personal Time" : "休息 / 私人时间", action: #selector(startBreakFromMenu), keyEquivalent: "")
-                    breakItem.target = self
-                    menu.addItem(breakItem)
+                    let deepItem = NSMenuItem(title: en ? "🎯 Deep Focus..." : "🎯 Deep Focus（专注冲刺）...", action: #selector(openDeepFocus), keyEquivalent: "")
+                    deepItem.target = self
+                    menu.addItem(deepItem)
                 }
             }
-        }
-        if duty.isOnDuty {
-            let clockOutItem = NSMenuItem(title: en ? "Clock Out (Off Duty)..." : "下班打卡...", action: #selector(clockOutFromMenu), keyEquivalent: "")
+            let clockOutItem = NSMenuItem(title: "", action: #selector(clockOutFromMenu), keyEquivalent: "")
+            clockOutItem.attributedTitle = highlightedTitle(en ? "⏹ Clock Out..." : "⏹ 下班打卡...")
             clockOutItem.target = self
             menu.addItem(clockOutItem)
         } else {
-            let clockInItem = NSMenuItem(title: en ? "Clock In (On Duty)" : "上班打卡", action: #selector(clockInFromMenu), keyEquivalent: "")
+            let clockInItem = NSMenuItem(title: "", action: #selector(clockInFromMenu), keyEquivalent: "")
+            clockInItem.attributedTitle = highlightedTitle(en ? "▶ Clock In (workday starts)" : "▶ 上班打卡（自动开始计时）")
             clockInItem.target = self
             menu.addItem(clockInItem)
         }
@@ -1012,6 +1022,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func showSoftReminder(_ item: ReminderItem) {
         guard !isReminding else { return }
         isReminding = true
+        isSoftReminderActive = true
         dismissBubble()
 
         let label = NSTextField(labelWithString: item.shortMessage)
@@ -1071,6 +1082,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func dismissSoftReminder() {
         dismissBubble()
         isReminding = false
+        isSoftReminderActive = false
     }
 
     // MARK: - Hard Reminder
@@ -1163,7 +1175,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func restoreCatWindowSize() {
         guard let original = originalCatWindowFrame else {
-            setCatState(.idle)
+            setCatState(sleepAfterOverlay ? .sleeping : .idle)
+            sleepAfterOverlay = false
             return
         }
         scaleTimer?.invalidate()
@@ -1180,7 +1193,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 timer.invalidate()
                 self.catWindow.setFrame(original, display: true)
                 self.originalCatWindowFrame = nil
-                self.setCatState(.idle)
+                self.setCatState(self.sleepAfterOverlay ? .sleeping : .idle)
+                self.sleepAfterOverlay = false
                 return
             }
             let t = CGFloat(step) / CGFloat(steps)
@@ -1703,83 +1717,66 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Focus (番茄钟打卡)
-
-    private func focusStatusTitle(_ session: FocusSession) -> String {
-        let en = L == .english
-        let elapsed = max(0, Int(Date().timeIntervalSince(session.start) / 60))
-        var name = "\(session.category.emoji) \(session.category.displayName(lang: L))"
-        if !session.note.isEmpty { name += "·\(session.note)" }
-        if let planned = session.plannedMinutes {
-            return en ? "\(name) · \(elapsed)/\(planned) min" : "\(name) · 已 \(elapsed)/\(planned) 分钟"
-        }
-        return en ? "\(name) · \(elapsed) min (free)" : "\(name) · 已 \(elapsed) 分钟（自由模式）"
-    }
+    // MARK: - Deep Focus (可选专注冲刺 — 不再承担"算不算工作"的判断)
 
     private func updateFocusMenuBar() {
         guard let button = statusItem?.button else { return }
+        let duty = DutyManager.shared
         if let session = focusManager.currentSession {
             let sec = max(0, Int(Date().timeIntervalSince(session.start)))
             let clock = String(format: "%02d:%02d", sec / 60, sec % 60)
-            button.title = " \(session.category.emoji)\(clock)"
-        } else if DutyManager.shared.isOnBreak {
+            button.title = " 🎯\(clock)"
+        } else if duty.isOnBreak {
             button.title = " ☕️"
-        } else if DutyManager.shared.isOnDuty {
-            button.title = " ⏱"
+        } else if duty.isOnDuty {
+            button.title = " ⏱" + compactCoarseHours(todayActiveMinutes())
         } else {
             button.title = ""
         }
     }
 
-    @objc private func openStartFocus() {
+    private func compactCoarseHours(_ minutes: Int) -> String {
+        if minutes < 30 { return "<0.5h" }
+        let hours = Double(Int((Double(minutes) / 30.0).rounded())) / 2.0
+        return hours == hours.rounded() ? "~\(Int(hours))h" : "~\(hours)h"
+    }
+
+    @objc private func openDeepFocus() {
         let en = L == .english
         let alert = NSAlert()
-        alert.messageText = en ? "Start Task" : "开始任务"
-        alert.informativeText = en ? "This block of time is for..." : "接下来这一块时间要做什么？"
+        alert.messageText = "🎯 Deep Focus"
+        alert.informativeText = en
+            ? "An optional sprint for rhythm — work counts either way."
+            : "可选的专注冲刺，只帮你控制节奏——不开它工作也照样在计。"
         alert.addButton(withTitle: en ? "Start" : "开始")
         alert.addButton(withTitle: en ? "Cancel" : "取消")
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 130))
-
-        let catLabel = NSTextField(labelWithString: en ? "Category:" : "类别:")
-        catLabel.frame = NSRect(x: 0, y: 100, width: 90, height: 24)
-        container.addSubview(catLabel)
-        let catPopup = NSPopUpButton(frame: NSRect(x: 95, y: 98, width: 240, height: 28))
-        for cat in WorkCategory.allCases {
-            var title = "\(cat.emoji) \(cat.displayName(lang: L))"
-            if !cat.countsAsWork { title += en ? " (not counted)" : "（不计工时）" }
-            catPopup.addItem(withTitle: title)
-        }
-        container.addSubview(catPopup)
-
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 66))
         let durLabel = NSTextField(labelWithString: en ? "Duration:" : "时长:")
-        durLabel.frame = NSRect(x: 0, y: 68, width: 90, height: 24)
+        durLabel.frame = NSRect(x: 0, y: 36, width: 90, height: 24)
         container.addSubview(durLabel)
-        let durations = [0, 15, 25, 45, 60, 90]
-        let durPopup = NSPopUpButton(frame: NSRect(x: 95, y: 66, width: 150, height: 28))
+        let durations = [25, 40, 50, 90, 0]
+        let durPopup = NSPopUpButton(frame: NSRect(x: 95, y: 34, width: 150, height: 28))
         for d in durations {
-            durPopup.addItem(withTitle: d == 0 ? (en ? "Free (end manually)" : "自由模式（手动结束）") : (en ? "\(d) min" : "\(d) 分钟"))
+            durPopup.addItem(withTitle: d == 0 ? (en ? "Open (end manually)" : "不限（手动结束）") : (en ? "\(d) min" : "\(d) 分钟"))
         }
-        durPopup.selectItem(at: 3)
+        durPopup.selectItem(at: 1)
         container.addSubview(durPopup)
         let customField = NSTextField(string: "")
         customField.placeholderString = en ? "custom (min)" : "自定义(分钟)"
-        customField.frame = NSRect(x: 250, y: 68, width: 85, height: 24)
+        customField.frame = NSRect(x: 250, y: 36, width: 85, height: 24)
         container.addSubview(customField)
-
         let noteLabel = NSTextField(labelWithString: en ? "Note:" : "备注:")
-        noteLabel.frame = NSRect(x: 0, y: 36, width: 90, height: 24)
+        noteLabel.frame = NSRect(x: 0, y: 4, width: 90, height: 24)
         container.addSubview(noteLabel)
         let noteField = NSTextField(string: "")
         noteField.placeholderString = en ? "optional, e.g. revise intro" : "可选，例如：改 intro"
-        noteField.frame = NSRect(x: 95, y: 36, width: 240, height: 24)
+        noteField.frame = NSRect(x: 95, y: 4, width: 240, height: 24)
         container.addSubview(noteField)
 
         alert.accessoryView = container
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let idx = max(0, min(catPopup.indexOfSelectedItem, WorkCategory.allCases.count - 1))
-        let category = WorkCategory.allCases[idx]
         var planned: Int?
         if let custom = Int(customField.stringValue), custom > 0 {
             planned = min(custom, 24 * 60)
@@ -1787,9 +1784,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let d = durations[max(0, durPopup.indexOfSelectedItem)]
             planned = d == 0 ? nil : d
         }
-        guard ensureOnDutyBeforeStart(category: category) else { return }
-        DutyManager.shared.endBreak()
-        focusManager.start(category: category, plannedMinutes: planned, note: noteField.stringValue)
+        guard ensureOnDutyForWork() else { return }
+        let duty = DutyManager.shared
+        if duty.isOnBreak {
+            duty.endBreak()
+            duty.stretchStart = Date()
+        }
+        focusManager.start(category: .deepWork, plannedMinutes: planned, note: noteField.stringValue)
         showFocusHUD()
         refreshMenu()
         updateFocusMenuBar()
@@ -1799,24 +1800,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func endFocusFromMenu() {
         guard let finished = focusManager.stop() else { return }
         hideFocusHUD()
+        closeStretchWithPrompt(restart: true)
         refreshMenu()
         updateFocusMenuBar()
         showFocusEndNotification(finished)
     }
 
-    private func showFocusStartNotification() {
-        guard let session = focusManager.currentSession else { return }
-        let en = L == .english
-        let name = "\(session.category.emoji) \(session.category.displayName(lang: L))"
-        let text: String
-        if let planned = session.plannedMinutes {
-            text = en ? "▶️ Start: \(name) \(planned) min" : "▶️ 开工：\(name) \(planned)分钟"
-        } else {
-            text = en ? "▶️ Start: \(name)" : "▶️ 开工：\(name)"
+    // Close the running stretch with the labeling prompt; optionally start a new one
+    private func closeStretchWithPrompt(restart: Bool) {
+        let duty = DutyManager.shared
+        guard let start = duty.stretchStart else { return }
+        let minutes = Int(Date().timeIntervalSince(start) / 60)
+        let (kind, note) = askSegmentKind(minutes: minutes)
+        duty.closeStretch(kind: kind, note: note)
+        if restart, duty.isOnDuty, !duty.isOnBreak {
+            duty.stretchStart = Date()
         }
-        notifyFocus(text: text, buttonTitle: en ? "Let's go!" : "开工！")
     }
 
+    // Sprint start is self-initiated → always light (meow + bubble), never the big overlay
+    private func showFocusStartNotification() {
+        guard let session = focusManager.currentSession else { return }
+        guard settings.globalMode != .superDND else { return }
+        let en = L == .english
+        let text: String
+        if let planned = session.plannedMinutes {
+            text = en ? "🎯 Deep Focus: \(planned) min" : "🎯 Deep Focus \(planned) 分钟，开始！"
+        } else {
+            text = en ? "🎯 Deep Focus started" : "🎯 Deep Focus 开始！"
+        }
+        playRandomSound()
+        let pseudo = ReminderItem(id: UUID(), name: "focus", shortMessage: text, urgentMessage: text, intervalMinutes: 0, enabled: true)
+        showSoftReminder(pseudo)
+    }
+
+    // Time-up must be noticeable → follows the global mode (strong in normal)
     private func showFocusEndNotification(_ session: FocusSession) {
         if isReminding {
             DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
@@ -1825,9 +1843,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let en = L == .english
-        let name = "\(session.category.emoji) \(session.category.displayName(lang: L))"
-        let text = en ? "✅ Done: \(name) \(formatMinutes(session.durationMinutes))" : "✅ 收工：\(name) \(formatMinutes(session.durationMinutes))"
-        notifyFocus(text: text, buttonTitle: en ? "Done!" : "收工！")
+        let text = en ? "✅ Deep Focus done: \(formatMinutes(session.durationMinutes))" : "✅ Deep Focus 完成：\(formatMinutes(session.durationMinutes))"
+        notifyFocus(text: text, buttonTitle: en ? "Nice!" : "收到！")
     }
 
     // Session start/end notifications follow the global mode:
@@ -1861,32 +1878,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ])
     }
 
-    private func todayWorkLine(_ summary: (minutes: Int, count: Int)) -> String {
-        let en = L == .english
-        return en ? "Today: \(formatMinutes(summary.minutes)) · \(summary.count) sessions" : "今日工作 \(formatMinutes(summary.minutes)) · \(summary.count) 段"
+    private func todayActiveMinutes() -> Int {
+        DutyManager.shared.activeWorkMinutes(on: Date())
     }
 
-    // Status line shows how long you've been on duty today — coarse half-hour
-    // granularity on purpose (低压力), exact times live in Work Stats.
+    private func todayWorkLine() -> String {
+        let en = L == .english
+        let duty = DutyManager.shared
+        var line = (en ? "Today: " : "今日工作 ") + formatMinutes(todayActiveMinutes())
+        if duty.isOnDuty {
+            let periods = duty.periodsOn(day: Date())
+            if let first = periods.first {
+                let span = max(0, Int(Date().timeIntervalSince(first.onDuty) / 60))
+                line += " · " + (en ? "on duty " : "在岗 ") + coarseHours(span)
+            }
+            if !duty.isOnBreak, let next = reminderManager.nextFireDate {
+                let mins = max(0, Int(next.timeIntervalSinceNow / 60))
+                line += en ? " · next break ~\(mins)m" : " · 下次提醒 ~\(mins)分"
+            }
+        }
+        return line
+    }
+
+    // Status line: WORKING + today's active total, or break/off-duty state
     private func dutyStatusLine() -> String {
         let en = L == .english
         let duty = DutyManager.shared
+        if duty.isOnDuty {
+            if duty.isOnBreak {
+                let mins = duty.openBreak.map { max(0, Int(Date().timeIntervalSince($0.start) / 60)) } ?? 0
+                return en ? "🟡 On break · \(formatMinutes(mins))" : "🟡 休息中 · 已 \(formatMinutes(mins))"
+            }
+            return "🟢 WORKING · " + formatMinutes(todayActiveMinutes())
+        }
         let periods = duty.periodsOn(day: Date())
         guard let first = periods.first else {
             return en ? "⚪️ OFF DUTY" : "⚪️ 今天还没上班"
         }
-        let spanEnd: Date
-        if duty.isOnDuty {
-            spanEnd = Date()
-        } else {
-            spanEnd = periods.compactMap { $0.offDuty }.max() ?? Date()
-        }
+        let spanEnd = periods.compactMap { $0.offDuty }.max() ?? Date()
         let span = max(0, Int(spanEnd.timeIntervalSince(first.onDuty) / 60))
         let spanStr = (en ? "on duty " : "在岗 ") + coarseHours(span)
-        if duty.isOnDuty {
-            let base = en ? "🟢 ON DUTY · \(spanStr)" : "🟢 上班中 · \(spanStr)"
-            return duty.isOnBreak ? base + (en ? " (break)" : "（休息中）") : base
-        }
         if duty.finalClockOut(on: Date()) != nil {
             return en ? "⚪️ OFF DUTY (done for today) · \(spanStr)" : "⚪️ 已下班（今天结束）· \(spanStr)"
         }
@@ -1935,29 +1966,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             title = en ? "Today" : "今日工作统计"
         }
 
-        var sessions = settings.focusSessions.filter { $0.end != nil && interval.contains($0.start) }
-        if let current = focusManager.currentSession, interval.contains(current.start) {
-            sessions.append(current)
-        }
-        sessions.sort { $0.start < $1.start }
-        let workSessions = sessions.filter { $0.category.countsAsWork }
+        let duty = DutyManager.shared
 
-        var workMin = 0
-        var choreMin = 0
-        var catMinutes: [Int: Int] = [:]
-        var catCounts: [Int: Int] = [:]
-        for session in sessions {
-            let d = session.durationMinutes
-            if session.category.countsAsWork { workMin += d } else { choreMin += d }
-            catMinutes[session.category.rawValue, default: 0] += d
-            catCounts[session.category.rawValue, default: 0] += 1
+        // Primary record: auto-tracked work segments (+ the running stretch)
+        var segments = duty.segments.filter { interval.contains($0.start) }
+        if let stretch = duty.stretchStart, interval.contains(stretch) {
+            segments.append(WorkSegment(id: UUID(), start: stretch, end: now, kind: .mixed, note: en ? "(ongoing)" : "（进行中）"))
         }
+        segments.sort { $0.start < $1.start }
+        let workMin = segments.reduce(0) { $0 + $1.durationMinutes }
+
+        // Optional overlay tool: deep focus sessions
+        var focus = settings.focusSessions.filter { $0.end != nil && interval.contains($0.start) }
+        if let current = focusManager.currentSession, interval.contains(current.start) {
+            focus.append(current)
+        }
+        focus.sort { $0.start < $1.start }
+        let deepMin = focus.reduce(0) { $0 + $1.durationMinutes }
 
         let timeFmt = DateFormatter()
         timeFmt.dateFormat = "HH:mm"
-        let duty = DutyManager.shared
         var lines: [String] = []
-        var workLineShown = false
 
         if tag == 0 {
             // ── Layer 1: boundary (今天的工作边界) ──
@@ -1980,12 +2009,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 lines.append((en ? "On duty " : "上班 ") + timeFmt.string(from: first.onDuty) + " → " + (en ? "off duty " : "下班 ") + offStr)
                 let span = max(0, Int(spanEnd.timeIntervalSince(first.onDuty) / 60))
                 lines.append("Duty span: " + formatMinutes(span))
-                lines.append((en ? "Actual work: " : "实际工作：") + formatMinutes(workMin) + (en ? " (chores excluded)" : "（不含杂务）"))
-                workLineShown = true
+                lines.append((en ? "Active work: " : "实际工作：") + formatMinutes(workMin))
+                if deepMin > 0 {
+                    lines.append("🎯 Deep Focus: " + formatMinutes(deepMin) + (en ? " (\(focus.count)x)" : "（\(focus.count) 次）"))
+                }
                 let breakMin = duty.breaksOn(day: now).reduce(0) { $0 + max(0, Int((($1.end ?? now).timeIntervalSince($1.start)) / 60)) }
                 lines.append((en ? "Break / personal: " : "休息/私人：") + formatMinutes(breakMin))
-                let idle = max(0, span - workMin - breakMin - choreMin)
-                lines.append((en ? "Available / idle during duty: " : "在班待命（没干活也没休息）：") + formatMinutes(idle))
+                if let longest = segments.map({ $0.durationMinutes }).max() {
+                    lines.append((en ? "Longest continuous stretch: " : "最长连续在线：") + formatMinutes(longest))
+                }
+                if !segments.isEmpty {
+                    let avg = workMin / segments.count
+                    lines.append(en ? "Stretches: \(segments.count) · avg \(formatMinutes(avg))" : "工作段数：\(segments.count) · 平均 \(formatMinutes(avg))")
+                }
                 lines.append((en ? "Duty blocks: \(periods.count)" : "上班段数：\(periods.count) 段"))
                 let reopensFinal = duty.reopensAfterFinal(on: now)
                 if duty.finalClockOut(on: now) != nil || reopensFinal > 0 {
@@ -2005,10 +2041,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         func overlaps(_ a: Date, _ b: Date?) -> Bool {
                             a < t1 && (b ?? now) > t0
                         }
-                        if workSessions.contains(where: { overlaps($0.start, $0.end) }) {
+                        if segments.contains(where: { overlaps($0.start, $0.end) }) {
                             bar += "█"
-                        } else if breaksToday.contains(where: { overlaps($0.start, $0.end) })
-                                    || sessions.contains(where: { !$0.category.countsAsWork && overlaps($0.start, $0.end) }) {
+                        } else if breaksToday.contains(where: { overlaps($0.start, $0.end) }) {
                             bar += "▓"
                         } else if periods.contains(where: { overlaps($0.onDuty, $0.offDuty) }) {
                             bar += "░"
@@ -2018,7 +2053,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     lines.append("")
                     lines.append(timeFmt.string(from: first.onDuty) + " " + bar + " " + offStr)
-                    lines.append(en ? "█ work  ▓ break/chores  ░ available  · off duty" : "█ 工作  ▓ 休息/杂务  ░ 待命  · 下班")
+                    lines.append(en ? "█ work  ▓ break  ░ other on-duty  · off duty" : "█ 工作  ▓ 休息  ░ 其他在岗  · 下班")
                 }
                 lines.append("")
             }
@@ -2054,7 +2089,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if !days.isEmpty {
                 lines.append((en ? "Duty days: \(days.count)" : "上班天数：\(days.count) 天"))
-                lines.append((en ? "Avg actual work: " : "平均实际工作：") + formatMinutes(workMin / days.count))
+                lines.append((en ? "Avg active work: " : "平均实际工作：") + formatMinutes(workMin / days.count))
+                if deepMin > 0 {
+                    lines.append((en ? "Deep Focus total: " : "Deep Focus 总计：") + formatMinutes(deepMin))
+                }
                 if spanDays > 0 {
                     lines.append((en ? "Avg duty span: " : "平均 duty span：") + formatMinutes(spanSum / spanDays))
                 }
@@ -2064,35 +2102,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 lines.append((en ? "Duty blocks: \(blocksSum) total" : "上班段数：共 \(blocksSum) 段"))
                 lines.append((en ? "Reopens after final clock-out: \(reopenSum) total" : "宣布下班后又开工：共 \(reopenSum) 次"))
+                if !segments.isEmpty {
+                    let longest = segments.map { $0.durationMinutes }.max() ?? 0
+                    lines.append((en ? "Longest continuous stretch: " : "最长连续在线：") + formatMinutes(longest))
+                }
                 lines.append("")
             }
         }
 
-        // ── Layer 2: work structure (工作结构) ──
-        if sessions.isEmpty {
-            lines.append(en ? "No sessions logged yet." : "还没有打卡记录。")
+        // ── Layer 2: what the work was (工作结构, 粗分类) ──
+        if segments.isEmpty && focus.isEmpty {
+            lines.append(en ? "Nothing tracked yet." : "还没有记录。")
         } else {
-            if !workLineShown {
-                lines.append((en ? "Actual work: " : "实际工作：") + formatMinutes(workMin) + (en ? " (chores excluded)" : "（不含杂务）"))
+            if tag != 0 && lines.isEmpty {
+                lines.append((en ? "Active work: " : "实际工作：") + formatMinutes(workMin))
             }
-            if choreMin > 0 {
-                lines.append((en ? "Chores: " : "杂务：") + formatMinutes(choreMin))
+            var kindMinutes: [Int: Int] = [:]
+            var kindCounts: [Int: Int] = [:]
+            for segment in segments {
+                kindMinutes[segment.kind.rawValue, default: 0] += segment.durationMinutes
+                kindCounts[segment.kind.rawValue, default: 0] += 1
             }
-            if !workSessions.isEmpty {
-                let avg = workMin / workSessions.count
-                let longest = workSessions.map { $0.durationMinutes }.max() ?? 0
-                lines.append(en
-                    ? "Sessions: \(workSessions.count) · avg \(formatMinutes(avg)) · longest \(formatMinutes(longest))"
-                    : "工作段数：\(workSessions.count) · 平均 \(formatMinutes(avg)) · 最长 \(formatMinutes(longest))")
-            }
-            lines.append("")
-            for cat in WorkCategory.allCases {
-                guard let mins = catMinutes[cat.rawValue] else { continue }
-                let count = catCounts[cat.rawValue] ?? 0
+            for kind in WorkKind.allCases {
+                guard let mins = kindMinutes[kind.rawValue], mins > 0 else { continue }
+                let count = kindCounts[kind.rawValue] ?? 0
                 if en {
-                    lines.append("\(cat.emoji) \(cat.displayName(lang: L)): \(formatMinutes(mins)) (\(count)x)")
+                    lines.append("\(kind.emoji) \(kind.displayName(lang: L)): \(formatMinutes(mins)) (\(count)x)")
                 } else {
-                    lines.append("\(cat.emoji) \(cat.displayName(lang: L))：\(formatMinutes(mins))（\(count)次）")
+                    lines.append("\(kind.emoji) \(kind.displayName(lang: L))：\(formatMinutes(mins))（\(count) 段）")
                 }
             }
             lines.append("")
@@ -2101,41 +2138,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let dayTimeFmt = DateFormatter()
             dayTimeFmt.dateFormat = "MM-dd HH:mm"
 
-            func sessionLine(_ session: FocusSession, withDate: Bool) -> String {
-                let startStr = withDate ? dayTimeFmt.string(from: session.start) : timeFmt.string(from: session.start)
-                let endStr = session.end.map { timeFmt.string(from: $0) } ?? (en ? "now" : "现在")
-                var line = "\(startStr)–\(endStr)  \(session.category.emoji) \(session.category.displayName(lang: L))  \(formatMinutes(session.durationMinutes))"
-                if !session.note.isEmpty { line += "  「\(session.note)」" }
-                if session.end == nil { line += en ? "  (ongoing)" : "（进行中）" }
+            func segmentLine(_ segment: WorkSegment, withDate: Bool) -> String {
+                let startStr = withDate ? dayTimeFmt.string(from: segment.start) : timeFmt.string(from: segment.start)
+                let endStr = timeFmt.string(from: segment.end)
+                var line = "\(startStr)–\(endStr)  \(segment.kind.emoji) \(segment.kind.displayName(lang: L))  \(formatMinutes(segment.durationMinutes))"
+                if !segment.note.isEmpty { line += "  「\(segment.note)」" }
                 return line
             }
 
             if tag == 0 {
-                for session in sessions {
-                    lines.append(sessionLine(session, withDate: false))
+                for segment in segments {
+                    lines.append(segmentLine(segment, withDate: false))
+                }
+                if !focus.isEmpty {
+                    lines.append("")
+                    lines.append("🎯 Deep Focus:")
+                    for session in focus {
+                        let endStr = session.end.map { timeFmt.string(from: $0) } ?? (en ? "now" : "现在")
+                        var line = "\(timeFmt.string(from: session.start))–\(endStr)  \(formatMinutes(session.durationMinutes))"
+                        if !session.note.isEmpty { line += "  「\(session.note)」" }
+                        if session.end == nil { line += en ? "  (ongoing)" : "（进行中）" }
+                        lines.append(line)
+                    }
                 }
             } else {
                 let unit: Calendar.Component = (tag == 3) ? .month : .day
-                var totals: [Date: (work: Int, chore: Int)] = [:]
-                for session in sessions {
-                    guard let bucket = cal.dateInterval(of: unit, for: session.start)?.start else { continue }
-                    var t = totals[bucket] ?? (0, 0)
-                    if session.category.countsAsWork { t.work += session.durationMinutes } else { t.chore += session.durationMinutes }
-                    totals[bucket] = t
+                var totals: [Date: Int] = [:]
+                for segment in segments {
+                    guard let bucket = cal.dateInterval(of: unit, for: segment.start)?.start else { continue }
+                    totals[bucket, default: 0] += segment.durationMinutes
                 }
                 let bucketFmt = DateFormatter()
                 bucketFmt.locale = Locale(identifier: en ? "en_US" : "zh_CN")
                 bucketFmt.dateFormat = tag == 3 ? (en ? "MMM" : "M月") : "MM-dd EEE"
                 for key in totals.keys.sorted() {
-                    let t = totals[key]!
-                    var line = "\(bucketFmt.string(from: key))  \(en ? "work" : "工作") \(formatMinutes(t.work))"
-                    if t.chore > 0 { line += "  ·  \(en ? "chores" : "杂务") \(formatMinutes(t.chore))" }
-                    lines.append(line)
+                    lines.append("\(bucketFmt.string(from: key))  \(en ? "work" : "工作") \(formatMinutes(totals[key] ?? 0))")
                 }
                 if tag == 1 {
                     lines.append("")
-                    for session in sessions {
-                        lines.append(sessionLine(session, withDate: true))
+                    for segment in segments {
+                        lines.append(segmentLine(segment, withDate: true))
                     }
                 }
             }
@@ -2275,7 +2317,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             timeStr = (en ? "elapsed " : "已 ") + String(format: "%02d:%02d", elapsedSec / 60, elapsedSec % 60)
         }
-        var text = "\(session.category.emoji) \(session.category.displayName(lang: L)) · \(timeStr)"
+        var text = "🎯 Deep Focus · \(timeStr)"
         if !session.note.isEmpty { text += "\n「\(session.note)」" }
         label.stringValue = text
         repositionFocusHUD()
@@ -2283,16 +2325,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Duty (上/下班 envelope)
 
-    private func todayWorkSummary() -> (minutes: Int, count: Int) {
-        let dayStart = Calendar.current.startOfDay(for: Date())
-        var sessions = settings.focusSessions.filter { $0.end != nil && $0.start >= dayStart }
-        if let cur = focusManager.currentSession, cur.start >= dayStart { sessions.append(cur) }
-        let work = sessions.filter { $0.category.countsAsWork }
-        return (work.reduce(0) { $0 + $1.durationMinutes }, work.count)
-    }
-
-    private func ensureOnDutyBeforeStart(category: WorkCategory) -> Bool {
-        guard category.countsAsWork else { return true }
+    private func ensureOnDutyForWork() -> Bool {
         let duty = DutyManager.shared
         if duty.isOnDuty { return true }
         if duty.hasClockedOutToday && !duty.hasFinalClockOutToday {
@@ -2304,7 +2337,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         if duty.hasFinalClockOutToday {
             alert.messageText = en ? "You said you were done for today." : "你已经宣布今天结束了。"
-            alert.informativeText = en ? "Start another work session anyway? This counts as reopening after your final clock-out." : "还是要再开一段工作吗？这会记为「宣布下班后又开工」。"
+            alert.informativeText = en ? "Work anyway? This counts as reopening after your final clock-out." : "还是要工作吗？这会记为「宣布下班后又开工」。"
             alert.addButton(withTitle: en ? "Start anyway" : "重新开工")
         } else {
             alert.messageText = en ? "Start workday?" : "开始今天的上班？"
@@ -2331,18 +2364,51 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         duty.clockIn()
         playRandomSound()
+        if catState == .sleeping { setCatState(.idle) }
         refreshMenu()
         updateFocusMenuBar()
     }
 
+    // Light post-hoc labeling — Mixed preselected, Enter confirms
+    private func askSegmentKind(minutes: Int) -> (WorkKind, String) {
+        let en = L == .english
+        let alert = NSAlert()
+        alert.messageText = en ? "What was this mostly? (\(formatMinutes(minutes)))" : "这一段主要在干什么？（\(formatMinutes(minutes))）"
+        alert.informativeText = en ? "Rough is fine — Enter for Mixed, or pick TBD and fill later." : "粗略就行——直接回车默认 Mixed，懒得想就选待定。"
+        alert.addButton(withTitle: en ? "Log" : "记录")
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 62))
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 34, width: 300, height: 26))
+        for kind in WorkKind.allCases {
+            popup.addItem(withTitle: "\(kind.emoji) \(kind.displayName(lang: L))")
+        }
+        container.addSubview(popup)
+        let noteField = NSTextField(string: "")
+        noteField.placeholderString = en ? "note (optional)" : "备注（可选）"
+        noteField.frame = NSRect(x: 0, y: 0, width: 300, height: 24)
+        container.addSubview(noteField)
+        alert.accessoryView = container
+        _ = alert.runModal()
+        let idx = max(0, min(popup.indexOfSelectedItem, WorkKind.allCases.count - 1))
+        return (WorkKind.allCases[idx], noteField.stringValue)
+    }
+
     @objc private func startBreakFromMenu() {
-        DutyManager.shared.startBreak()
+        let duty = DutyManager.shared
+        guard duty.isOnDuty, !duty.isOnBreak else { return }
+        if focusManager.currentSession != nil {
+            _ = focusManager.stop()
+            hideFocusHUD()
+        }
+        closeStretchWithPrompt(restart: false)
+        duty.startBreak()
         refreshMenu()
         updateFocusMenuBar()
     }
 
     @objc private func endBreakFromMenu() {
-        DutyManager.shared.endBreak()
+        let duty = DutyManager.shared
+        duty.endBreak()
+        duty.stretchStart = Date()
         refreshMenu()
         updateFocusMenuBar()
     }
@@ -2351,15 +2417,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let en = L == .english
         let duty = DutyManager.shared
         guard duty.isOnDuty else { return }
-        let summary = todayWorkSummary()
+        let active = todayActiveMinutes()
+        let segCount = duty.segmentsOn(day: Date()).count + (duty.stretchStart != nil ? 1 : 0)
         let alert = NSAlert()
         alert.messageText = en ? "Clock out?" : "下班打卡？"
         var infoText = en
-            ? "Today: \(formatMinutes(summary.minutes)) across \(summary.count) sessions."
-            : "今天：\(formatMinutes(summary.minutes)) · \(summary.count) 段工作。"
-        if focusManager.currentSession != nil {
-            infoText += en ? "\nThe running session will be ended and logged." : "\n进行中的这段工作会一并结束并记录。"
-        }
+            ? "Today: \(formatMinutes(active)) across \(segCount) stretches."
+            : "今天：\(formatMinutes(active)) · \(segCount) 段。"
         infoText += en ? "\nIs this your final clock-out today?" : "\n这是今天最后一次下班吗？"
         alert.informativeText = infoText
         alert.addButton(withTitle: en ? "Done for today" : "今天到此结束")
@@ -2371,15 +2435,168 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .alertSecondButtonReturn: isFinal = false
         default: return
         }
-        focusManager.stop()
+        _ = focusManager.stop()
         hideFocusHUD()
+        closeStretchWithPrompt(restart: false)
         duty.clockOut(final: isFinal)
-        playRandomSound()
         refreshMenu()
         updateFocusMenuBar()
-        if !isReminding {
-            setCatState(.sleeping)
+        if isFinal {
+            // 收工仪式: the one moment that keeps the big animation
+            sleepAfterOverlay = true
+            let text = en ? "🌙 Done for today: \(formatMinutes(active))" : "🌙 收工！今天工作 \(formatMinutes(active))"
+            showFocusOverlay(text: text, buttonTitle: en ? "Off duty!" : "下班！")
+            if isReminding == false { sleepAfterOverlay = false; setCatState(.sleeping) }
+        } else {
+            playRandomSound()
+            if !isReminding { setCatState(.sleeping) }
         }
+    }
+
+    // MARK: - Idle detection & overwork nudges
+
+    private func systemIdleSeconds() -> TimeInterval {
+        let types: [CGEventType] = [.mouseMoved, .keyDown, .leftMouseDown, .rightMouseDown, .scrollWheel, .leftMouseDragged]
+        return types.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
+    }
+
+    private func checkIdleAndOverwork() {
+        let duty = DutyManager.shared
+        guard duty.isOnDuty else {
+            idleCandidateStart = nil
+            idleLongPromptShown = false
+            return
+        }
+        settings.workHeartbeat = Date()
+        guard !idlePromptActive, !isReminding else { return }
+
+        let idle = systemIdleSeconds()
+        if !duty.isOnBreak {
+            if idle >= 30 * 60 {
+                if idleCandidateStart == nil {
+                    idleCandidateStart = Date().addingTimeInterval(-idle)
+                }
+                if idle >= 2 * 3600 && !idleLongPromptShown, let start = idleCandidateStart {
+                    idleLongPromptShown = true
+                    promptLongIdle(since: start)
+                }
+            } else if let start = idleCandidateStart {
+                idleCandidateStart = nil
+                idleLongPromptShown = false
+                let minutes = Int(Date().timeIntervalSince(start) / 60)
+                if minutes >= 30 {
+                    promptIdleClassification(since: start, minutes: minutes)
+                }
+            }
+        }
+
+        // continuous-online nudge every 2h of unbroken stretch
+        if !duty.isOnBreak, let stretch = duty.stretchStart {
+            if lastOverworkStretchStart != stretch {
+                lastOverworkStretchStart = stretch
+                overworkNotifiedMark = 0
+            }
+            let stretchMin = Int(Date().timeIntervalSince(stretch) / 60)
+            let mark = stretchMin / 120
+            if mark > overworkNotifiedMark && stretchMin >= 120 {
+                overworkNotifiedMark = mark
+                notifyOverwork(hours: mark * 2)
+            }
+        }
+    }
+
+    // Came back after 30+ min away: was that a break, or slow work (waiting on a model)?
+    private func promptIdleClassification(since start: Date, minutes: Int) {
+        idlePromptActive = true
+        defer { idlePromptActive = false }
+        let en = L == .english
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = en ? "Away for \(formatMinutes(minutes))" : "刚才离开了 \(formatMinutes(minutes))"
+        alert.informativeText = en ? "Count it as a break, or were you still working (waiting, reading)?" : "这段算休息，还是其实在工作（等模型、看材料）？"
+        alert.addButton(withTitle: en ? "It was a break" : "算休息")
+        alert.addButton(withTitle: en ? "I was working" : "在工作")
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return }
+        let duty = DutyManager.shared
+        if focusManager.currentSession != nil {
+            _ = focusManager.stop(at: start)
+            hideFocusHUD()
+        }
+        if let stretch = duty.stretchStart, stretch < start {
+            duty.closeStretch(at: start, kind: .mixed)
+        } else {
+            duty.stretchStart = nil
+        }
+        duty.insertBreak(from: start, to: Date())
+        duty.stretchStart = Date()
+        refreshMenu()
+        updateFocusMenuBar()
+    }
+
+    // Gone 2h+: offer to end the day, but never auto clock-out
+    private func promptLongIdle(since start: Date) {
+        idlePromptActive = true
+        defer { idlePromptActive = false }
+        let en = L == .english
+        let timeFmt = DateFormatter()
+        timeFmt.dateFormat = "HH:mm"
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = en ? "Looks like you've been gone a while." : "你似乎离开很久了。"
+        alert.informativeText = en
+            ? "No activity for 2h+. End the workday? Clock-out would be recorded as \(timeFmt.string(from: start))."
+            : "已经 2 小时以上没有活动。结束今天吗？下班时间会记为 \(timeFmt.string(from: start))。"
+        alert.addButton(withTitle: en ? "Clock out (done for today)" : "下班（今天结束）")
+        alert.addButton(withTitle: en ? "It was a break, I'm back" : "算休息，我回来了")
+        alert.addButton(withTitle: en ? "Still working" : "还在工作")
+        let duty = DutyManager.shared
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            if focusManager.currentSession != nil {
+                _ = focusManager.stop(at: start)
+                hideFocusHUD()
+            }
+            if let stretch = duty.stretchStart, stretch < start {
+                duty.closeStretch(at: start, kind: .mixed)
+            } else {
+                duty.stretchStart = nil
+            }
+            duty.clockOut(at: start, final: true)
+            if !isReminding { setCatState(.sleeping) }
+        case .alertSecondButtonReturn:
+            if focusManager.currentSession != nil {
+                _ = focusManager.stop(at: start)
+                hideFocusHUD()
+            }
+            if let stretch = duty.stretchStart, stretch < start {
+                duty.closeStretch(at: start, kind: .mixed)
+            } else {
+                duty.stretchStart = nil
+            }
+            duty.insertBreak(from: start, to: Date())
+            duty.stretchStart = Date()
+        default:
+            break
+        }
+        idleCandidateStart = nil
+        idleLongPromptShown = false
+        refreshMenu()
+        updateFocusMenuBar()
+    }
+
+    private func notifyOverwork(hours: Int) {
+        let en = L == .english
+        let suggestions = en
+            ? ["drink some water", "stand up and stretch", "look out the window", "pet the cat", "walk for 2 minutes"]
+            : ["喝口水", "站起来伸个懒腰", "看看窗外", "摸摸猫", "走两分钟"]
+        let pick = suggestions.randomElement() ?? ""
+        let text = en
+            ? "🔥 \(hours)h continuously online — step away for 2 min: \(pick)?"
+            : "🔥 已经连续在线 \(hours) 小时了——离开 2 分钟：\(pick)？"
+        let pseudo = ReminderItem(id: UUID(), name: "overwork", shortMessage: text, urgentMessage: text, intervalMinutes: 0, enabled: true)
+        guard let strength = settings.globalMode.strength else { return }
+        showReminder(pseudo, strength: strength)
     }
 
     private func checkStaleDutyOnLaunch() {
@@ -2389,11 +2606,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let cal = Calendar.current
         let dayStart = cal.startOfDay(for: stale.onDuty)
         let dayEnd = dayStart.addingTimeInterval(86400)
-        let lastSessionEnd = settings.focusSessions
+        let segmentEnds = settings.workSegments
+            .filter { $0.start >= dayStart && $0.start < dayEnd }
+            .map { $0.end }
+        let sessionEnds = settings.focusSessions
             .filter { $0.start >= dayStart && $0.start < dayEnd }
             .compactMap { $0.end }
-            .max()
-        let fallback = lastSessionEnd ?? stale.onDuty
+        let fallback = (segmentEnds + sessionEnds).max() ?? stale.onDuty
         let timeFmt = DateFormatter()
         timeFmt.dateFormat = "HH:mm"
         let dayFmt = DateFormatter()
@@ -2604,7 +2823,7 @@ extension AppDelegate: AlarmManagerDelegate {
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         dutyStatusMenuItem?.title = dutyStatusLine()
-        dutyTodayMenuItem?.title = todayWorkLine(todayWorkSummary())
+        dutyTodayMenuItem?.title = todayWorkLine()
         updateFocusMenuBar()
     }
 }
@@ -2612,6 +2831,7 @@ extension AppDelegate: NSMenuDelegate {
 extension AppDelegate: FocusManagerDelegate {
     func focusSessionTimeUp(_ session: FocusSession) {
         hideFocusHUD()
+        closeStretchWithPrompt(restart: true)
         refreshMenu()
         updateFocusMenuBar()
         showFocusEndNotification(session)

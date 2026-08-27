@@ -31,6 +31,10 @@ class ReminderManager {
         }
     }
 
+    var nextFireDate: Date? {
+        timers.values.map { $0.fireDate }.min()
+    }
+
     func pause(minutes: Int) {
         pauseUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
     }

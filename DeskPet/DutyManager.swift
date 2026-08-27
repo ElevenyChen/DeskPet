@@ -35,10 +35,12 @@ class DutyManager {
         var list = periods
         list.append(DutyPeriod(id: UUID(), onDuty: date, offDuty: nil, offDutyInferred: false))
         periods = list
+        if stretchStart == nil { stretchStart = date }
     }
 
     func clockOut(at date: Date = Date(), final: Bool = true) {
         endBreak(at: date)
+        closeStretch(at: date, kind: .mixed)  // safety net; callers label first
         var list = periods
         guard let idx = list.lastIndex(where: { $0.offDuty == nil }) else { return }
         list[idx].offDuty = max(date, list[idx].onDuty)
@@ -72,6 +74,11 @@ class DutyManager {
 
     func close(id: UUID, at date: Date, inferred: Bool) {
         endBreak(at: date)
+        if let start = stretchStart, start < date {
+            closeStretch(at: date, kind: .mixed)
+        } else {
+            stretchStart = nil
+        }
         var list = periods
         guard let idx = list.firstIndex(where: { $0.id == id }) else { return }
         list[idx].offDuty = max(date, list[idx].onDuty)
@@ -95,8 +102,16 @@ class DutyManager {
 
     func startBreak(at date: Date = Date()) {
         guard isOnDuty, openBreak == nil else { return }
+        closeStretch(at: date, kind: .mixed)  // safety net; callers label first
         var list = breaks
         list.append(BreakPeriod(id: UUID(), start: date, end: nil))
+        breaks = list
+    }
+
+    // Retro-insert a break (e.g. confirmed idle time)
+    func insertBreak(from: Date, to: Date) {
+        var list = breaks
+        list.append(BreakPeriod(id: UUID(), start: from, end: max(to, from)))
         breaks = list
     }
 
@@ -112,5 +127,54 @@ class DutyManager {
         let start = cal.startOfDay(for: day)
         guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return [] }
         return breaks.filter { $0.start >= start && $0.start < end }.sorted { $0.start < $1.start }
+    }
+
+    // MARK: - Active stretch (state-first: clock in → work accumulates by itself)
+
+    var stretchStart: Date? {
+        get { settings.activeStretchStart }
+        set { settings.activeStretchStart = newValue }
+    }
+
+    var segments: [WorkSegment] { settings.workSegments }
+
+    func segmentsOn(day: Date) -> [WorkSegment] {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: day)
+        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return [] }
+        return segments.filter { $0.start >= start && $0.start < end }.sorted { $0.start < $1.start }
+    }
+
+    @discardableResult
+    func closeStretch(at date: Date = Date(), kind: WorkKind, note: String = "") -> WorkSegment? {
+        guard let start = stretchStart else { return nil }
+        let segment = WorkSegment(id: UUID(), start: start, end: max(date, start), kind: kind, note: note)
+        settings.appendWorkSegment(segment)
+        stretchStart = nil
+        return segment
+    }
+
+    // Active work = closed segments + the currently running stretch
+    func activeWorkMinutes(on day: Date) -> Int {
+        var total = segmentsOn(day: day).reduce(0) { $0 + $1.durationMinutes }
+        if let start = stretchStart, Calendar.current.isDate(start, inSameDayAs: day) {
+            total += max(0, Int(Date().timeIntervalSince(start) / 60))
+        }
+        return total
+    }
+
+    // A stretch left running from a previous app run: close it at the last
+    // heartbeat instead of counting hours nobody worked.
+    func reconcileStretchOnLaunch() {
+        if let start = stretchStart {
+            let heartbeat = max(settings.workHeartbeat ?? start, start)
+            if Date().timeIntervalSince(heartbeat) > 10 * 60 {
+                closeStretch(at: heartbeat, kind: .mixed)
+            }
+        }
+        // On duty but no stretch running (migration / recovery): start counting now
+        if stretchStart == nil, isOnDuty, !isOnBreak {
+            stretchStart = Date()
+        }
     }
 }
