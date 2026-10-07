@@ -21,11 +21,7 @@ DerivedData/
 # Build artifacts
 DeskPet.app/
 DeskPet.dmg
-
-# Tauri
-deskpet-tauri/node_modules/
-deskpet-tauri/src-tauri/target/
-deskpet-tauri/src-tauri/gen/
+dist/
 
 # Claude Code
 .claude/

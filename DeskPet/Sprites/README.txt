@@ -209,6 +209,11 @@ TIPS
 - Start with idle/ and walk_right/ — those are the most visible states
 - For walk_left/, you can horizontally flip your walk_right/ images
 - The sleeping/ folder is great for action groups (side, front, curled, etc.)
-- Keep file sizes small (under 100KB per frame) for smooth playback
+- Frames in one state should all be the same size, or the cat jumps between
+  frames. Easiest: don't hand-place files, run from the repo root:
+      python3 scripts/prepare_sprites.py import <folder_of_images> <state>/<group>
+      python3 scripts/prepare_sprites.py check
+  (it crops to a shared bounding box, downscales to 1024px, and renumbers)
+- Keep frames reasonably small (<= 1024px on the long side) for smooth playback
 - If something looks wrong, check: file names start from 0? no gaps? PNG format?
 - Action groups are picked fresh each time the cat enters that state

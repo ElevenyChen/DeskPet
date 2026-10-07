@@ -78,6 +78,15 @@ macOS menu bar app built with Swift 5 + AppKit, targeting macOS 13+.
 ### Custom Sprites
 Drop PNGs into `Sprites/` subfolders, named `0.png, 1.png, 2.png...` — the app picks them up automatically. Create sub-subfolders for action groups that are randomly chosen on state transitions. See `Sprites/README.txt` for the full guide.
 
+To add frames the easy way, use the pipeline script (needs Pillow: `python3 -m pip install pillow`):
+
+```bash
+python3 scripts/prepare_sprites.py import path/to/source_images grooming/paw   # crop, downscale, renumber
+python3 scripts/prepare_sprites.py check                                        # validate layout
+```
+
+Then clean build (Cmd+Shift+K) so Xcode copies the new files. `scripts/release.sh` builds, verifies the bundle, and produces a DMG.
+
 ## Project Structure
 
 ```

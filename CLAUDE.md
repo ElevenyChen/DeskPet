@@ -13,6 +13,9 @@ macOS 菜单栏常驻桌宠应用。一只像素猫住在你的桌面上，会�
 ## 项目结构
 
 ```
+scripts/
+├── prepare_sprites.py      # 素材流水线：import / trim / check（Sprites/ 是它的产物）
+└── release.sh              # 一键 clean build + 校验 bundle 内 Sprites + 打 DMG
 DeskPet/
 ├── main.swift              # App 入口
 ├── AppDelegate.swift       # 菜单栏、猫窗口、提醒逻辑、拖拽、行为循环、窗口缩放
@@ -29,7 +32,7 @@ DeskPet/
 ├── Info.plist
 ├── DeskPet.entitlements
 ├── Assets.xcassets/        # AppIcon（像素猫图标，全套 10 尺寸）
-└── Sprites/                # 自定义 PNG 帧（按文件夹分状态，支持动作组）
+└── Sprites/                # PNG 帧（按文件夹分状态，支持动作组）—— 生成物，用脚本改，不手改
     ├── icon/               # App 图标（同步到 Assets.xcassets）
     ├── idle/               # 待机（支持动作组子文件夹，如 blink/, tail/）
     ├── lying_down/         # 趴下 + 睡觉共用（sleeping 复用此文件夹，代码叠加 zzZ）
@@ -143,9 +146,15 @@ DeskPet/
 - 所有菜单和对话框支持中英双语
 
 ### 自定义素材
-- 放 PNG 到 `Sprites/` 对应文件夹，命名 `0.png, 1.png, 2.png...`，app 自动切换为图片动画
-- `Sprites/icon/0.png` 替换图标，需用 sips 生成全套尺寸到 Assets.xcassets
+- `Sprites/` 布局：每个状态一个文件夹，帧命名 `0.png, 1.png, 2.png...`，app 自动切换为图片动画
 - **动作组**：在状态文件夹内创建子文件夹，每个子文件夹为一个动作组。切换状态时随机选择一个动作组播放。兼容旧的扁平布局
+- **加新动作走脚本，不手放 PNG**（源图放 `cat_image/`，该目录已 gitignore）：
+  ```bash
+  python3 scripts/prepare_sprites.py import cat_image/grooming_paw grooming/paw   # 可加 --chroma 抠绿幕
+  python3 scripts/prepare_sprites.py check                                        # 编号连续、同状态同尺寸
+  ```
+  import 会自动按整个状态的并集包围盒裁边（组内各帧共用一个裁剪框，猫不会跳）、长边压到 1024px、重新编号
+- `Sprites/icon/0.png` 替换图标，需用 sips 生成全套尺寸到 Assets.xcassets
 - **注意**：添加新素材后必须 clean build（Cmd+Shift+K），增量 build 不会同步新资源文件
 
 ## 关键实现细节
@@ -237,13 +246,31 @@ open ~/Library/Developer/Xcode/DerivedData/DeskPet-*/Build/Products/Release/Desk
 ### 打包分发
 
 ```bash
-# Release 构建
-xcodebuild -project DeskPet.xcodeproj -scheme DeskPet -configuration Release clean build
-
-# 创建 DMG
-hdiutil create -volname DeskPet -srcfolder Build/Products/Release/DeskPet.app \
-  -ov -format UDZO DeskPet.dmg
+scripts/release.sh          # -> dist/DeskPet.dmg
+scripts/release.sh 1.2.0    # -> dist/DeskPet-1.2.0.dmg
 ```
+
+脚本依次：校验 Sprites（有 Pillow 时）→ clean Release build → 核对 bundle 内 Sprites PNG 数量等于源目录 → hdiutil 打 DMG。任一步失败即退出。
+
+## 生成物与源文件边界
+
+| 路径 | 性质 | 怎么改 |
+| --- | --- | --- |
+| `DeskPet/Sprites/**` | 生成物 | 改源图后 `scripts/prepare_sprites.py import/trim`，不要直接 PS 单帧 |
+| `DeskPet/Assets.xcassets/AppIcon*` | 生成物 | 改 `Sprites/icon/0.png` 后用 sips 重新生成全套 |
+| `cat_image/`（gitignore） | 源图 | AI 出图、原始截图放这里 |
+| `build/`、`dist/`（gitignore） | 构建产物 | 由 `scripts/release.sh` 产生 |
+| 其余 `.swift` / `.md` / `.plist` | 源文件 | 直接编辑 |
+
+## 完成标准（Done When）
+
+改动类型不同，交付前要跑的检查不同。跑不了就在回复里明说「未验证 + 原因」，不要默默交付。
+
+- **改 Swift**：`xcodebuild -project DeskPet.xcodeproj -scheme DeskPet -configuration Release build` 通过。云端/Linux 会话编译不了 Swift，必须说明未构建
+- **改 Sprites**：`python3 scripts/prepare_sprites.py check` 输出 `OK`，然后 clean build 确认新文件进了 bundle
+- **改 UserDefaults schema**（ReminderItem / AlarmItem / WorkSegment 等 Codable 结构）：说明旧数据如何迁移或兜底；开发机需 `defaults delete com.deskpet.cat` 清旧数据时写进回复
+- **改 CLAUDE.md 描述的行为**：同一提交里同步更新 CLAUDE.md 对应段落
+- **发版**：`scripts/release.sh` 全程无报错
 
 ## 已踩过的坑
 
@@ -255,7 +282,7 @@ hdiutil create -volname DeskPet -srcfolder Build/Products/Release/DeskPet.app \
 6. **气泡放在猫窗口内会重叠** — 改为独立窗口悬浮在猫正上方
 7. **强提醒重复猫** — overlay 内画大猫 + 猫窗口放大 = 两只猫叠加，去掉 overlay 内的猫只保留窗口缩放
 8. **强提醒按钮不可见** — 半透明遮罩上的按钮看不清，改为白底卡片内放按钮
-9. **Xcode 增量 build 不同步新资源** — Sprites 文件夹内新增文件需 clean build 才会拷贝到 app bundle
+9. **Xcode 增量 build 不同步新资源** — Sprites 文件夹内新增文件需 clean build 才会拷贝到 app bundle（`scripts/release.sh` 会核对 bundle 内 PNG 数量）
 10. **onDragEnd 硬编码 150x100** — 拖拽后 imageView 缩小，改用 `layoutCatContent()` 动态计算
 11. **动作组初始化未设 currentSpriteGroup** — 首次 idle 不走 setCatState，需在 checkForPNGSprites 中手动设置
 
@@ -292,3 +319,4 @@ hdiutil create -volname DeskPet -srcfolder Build/Products/Release/DeskPet.app \
 - [ ] 猫咪皮肤商店 / 导入
 - [ ] 自定义猫叫声音
 - [ ] 猫咪名字
+12. **AI 出图尺寸差 1px** — reminder/group2 曾有一帧 1535 宽、其余 1536，组内切帧会抖；`prepare_sprites.py trim` 按状态内最大画布对齐后统一裁剪，`check` 会报组内尺寸不一致
