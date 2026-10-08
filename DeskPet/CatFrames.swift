@@ -25,7 +25,45 @@ struct CatFrames {
         }
     }
 
+    // MARK: - Frame cache
+    //
+    // The animation timer asks for the current group's frames on every tick and
+    // setCatState asks again on every state change. Without a cache each call
+    // re-read and re-decoded every PNG of the group. Sprites live in the app
+    // bundle and never change while the app runs, so cache per directory.
+    //
+    // Memory: an NSImage keeps its decoded bitmap once drawn (~3 MB per frame at
+    // 1024px). A small LRU keeps rarely used states from piling up.
+
+    private static let maxCachedDirectories = 12
+    private static var frameCache: [String: [NSImage]] = [:]   // dir -> frames (never empty)
+    private static var cacheOrder: [String] = []               // least recently used first
+    private static var missingDirs: Set<String> = []           // probed, no frames; kept out of the LRU
+    private static var groupCache: [String: [String]] = [:]    // state dir -> action groups
+
+    private static func touch(_ dir: String) {
+        if let i = cacheOrder.firstIndex(of: dir) { cacheOrder.remove(at: i) }
+        cacheOrder.append(dir)
+        while cacheOrder.count > maxCachedDirectories {
+            let evicted = cacheOrder.removeFirst()
+            frameCache.removeValue(forKey: evicted)
+        }
+    }
+
+    /// Drop every cached frame. Only needed if sprites could change at runtime.
+    static func clearCache() {
+        frameCache.removeAll()
+        cacheOrder.removeAll()
+        missingDirs.removeAll()
+        groupCache.removeAll()
+    }
+
     private static func loadFrames(from dir: String) -> [NSImage]? {
+        if missingDirs.contains(dir) { return nil }
+        if let cached = frameCache[dir] {
+            touch(dir)
+            return cached
+        }
         var images: [NSImage] = []
         for i in 0..<20 {
             if let img = NSImage(contentsOfFile: "\(dir)/\(i).png") {
@@ -34,12 +72,25 @@ struct CatFrames {
                 break
             }
         }
-        return images.isEmpty ? nil : images
+        if images.isEmpty {
+            missingDirs.insert(dir)
+            return nil
+        }
+        frameCache[dir] = images
+        touch(dir)
+        return images
     }
 
     static func actionGroups(for state: CatState) -> [String] {
         guard let base = spritesDir else { return [] }
         let dir = "\(base)/\(folderName(for: state))"
+        if let cached = groupCache[dir] { return cached }
+        let groups = scanActionGroups(in: dir)
+        groupCache[dir] = groups
+        return groups
+    }
+
+    private static func scanActionGroups(in dir: String) -> [String] {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
         var groups: [String] = []

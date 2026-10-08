@@ -165,6 +165,12 @@ DeskPet/
 - **遮罩窗口** (OverlayWindow)：强提醒时全屏半透明遮罩 + 白底卡片在猫下方
 - 三个窗口完全分离，互不干扰
 
+### 帧缓存
+- `CatFrames.loadFrames(from:)` 按目录缓存 `[NSImage]`，`actionGroups(for:)` 按状态目录缓存子文件夹列表；探测过没有帧的目录记在 `missingDirs`，不占缓存位
+- 动画定时器每个 tick 都调 `pngFrames`，没缓存时每帧都重读整组 PNG；现在只在首次访问时读盘
+- LRU 上限 12 个目录（`maxCachedDirectories`），因为 NSImage 画过一次后会保留解码位图（1024px 约 3MB/帧），防止冷门状态堆积
+- Sprites 在 bundle 内运行时不变，所以不做失效；`clearCache()` 留作兜底
+
 ### 窗口自适应机制
 - `resizeCatWindow(for:)` 根据首帧图片宽高比 + `catScale` 计算窗口大小
 - `setCatState()` 切换状态时自动 resize（dragged 除外）
